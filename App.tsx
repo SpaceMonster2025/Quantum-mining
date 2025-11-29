@@ -5,6 +5,7 @@ import { GameState, Ship, Upgrades } from './types';
 import { 
   STARTING_CREDITS, STARTING_AMMO, ORE_VALUE, UPGRADE_COST_BASE, UPGRADE_COST_MULTIPLIER 
 } from './constants';
+import { audio } from './utils/audio';
 
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>(GameState.MENU);
@@ -31,6 +32,9 @@ const App: React.FC = () => {
   const syncUI = useCallback(() => setUiVersion(v => v + 1), []);
 
   const handleStartGame = () => {
+    // Initialize Audio Engine on first user interaction
+    audio.init();
+
     // Reset core stats if coming from menu/gameover
     if (gameState === GameState.GAME_OVER || gameState === GameState.MENU) {
        shipRef.current.credits = STARTING_CREDITS;

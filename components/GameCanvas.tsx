@@ -9,6 +9,7 @@ import {
   COLOR_LASER
 } from '../constants';
 import { distance, randomRange, checkCollision, generatePolygonOffsets } from '../utils/physics';
+import { audio } from '../utils/audio';
 
 interface GameCanvasProps {
   gameState: GameState;
@@ -61,6 +62,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
   const breakAsteroid = (ast: Asteroid, impactVx: number, impactVy: number) => {
     // Visual Dust
     spawnParticles(ast.x, ast.y, ast.color, 8, 2, 25);
+    
+    // Audio
+    if (ast.tier === AsteroidTier.TITAN) audio.playExplosion('large');
+    else audio.playExplosion('small');
 
     if (ast.tier === AsteroidTier.TITAN) {
       // Titan -> Chunks
@@ -147,7 +152,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
   // --- Physics Loop ---
 
   const update = useCallback(() => {
-    if (gameState !== GameState.PLAYING) return;
+    if (gameState !== GameState.PLAYING) {
+        // Stop loops if paused/docked/gameover
+        audio.setThrust(false);
+        audio.setLaser(false);
+        audio.setTractor(false);
+        return;
+    }
 
     const ship = shipRef.current;
     const upgrades = upgradesRef.current;
@@ -163,6 +174,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       ship.vx += Math.cos(ship.angle) * (SHIP_ACCEL + (upgrades.engineLevel * 0.02));
       ship.vy += Math.sin(ship.angle) * (SHIP_ACCEL + (upgrades.engineLevel * 0.02));
       ship.thrusting = true;
+      audio.setThrust(true);
       // Thruster particles
       spawnParticles(
         ship.x - Math.cos(ship.angle) * 15, 
@@ -171,6 +183,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       );
     } else {
       ship.thrusting = false;
+      audio.setThrust(false);
     }
 
     if (keysPressed.current.has('s') || keysPressed.current.has('arrowdown')) {
@@ -206,6 +219,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
 
     // 3. Mining Laser Logic
     laserRef.current.active = false;
+    audio.setLaser(mouseRef.current.down);
+    
     if (mouseRef.current.down) {
       const centerX = screenSize.width / 2;
       const centerY = screenSize.height / 2;
@@ -273,6 +288,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     }
 
     // 4. Tractor Beam (Right Mouse)
+    audio.setTractor(mouseRef.current.rightDown);
     if (mouseRef.current.rightDown) {
       const TRACTOR_RANGE = 500;
       const TRACTOR_FORCE = 0.5;
@@ -297,6 +313,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     // 5. Mines
     minesRef.current.forEach(mine => {
       mine.timer--;
+      
+      if (mine.timer === MINE_PUCKER_DURATION) {
+          audio.playMinePucker();
+      }
       
       if (mine.timer > 0 && mine.timer < MINE_PUCKER_DURATION) {
         mine.state = 'PUCKER';
@@ -341,6 +361,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       } else if (mine.timer <= 0) {
         mine.state = 'DETONATING';
         
+        audio.playExplosion('large');
+
         // TRIGGER SCREEN SHAKE
         shakeRef.current = 25;
 
@@ -430,6 +452,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
           if (ship.cargo < ship.maxCargo) {
             ship.cargo++;
             ast.hp = 0;
+            audio.playPickup();
             syncUI();
           }
         } else {
@@ -447,6 +470,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
                const angle = Math.atan2(ship.y - ast.y, ship.x - ast.x);
                ship.vx += Math.cos(angle) * 5;
                ship.vy += Math.sin(angle) * 5;
+               audio.playExplosion('small');
                syncUI();
              }
           }
@@ -458,6 +482,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     const distToStation = distance({x:0, y:0}, ship);
     if (distToStation < STATION_RADIUS + SHIP_RADIUS && Math.abs(ship.vx) < 1 && Math.abs(ship.vy) < 1) {
        setGameState(GameState.DOCKED);
+       audio.playUI('buy'); // Nice chime on dock
     }
 
     // 8. Particles
@@ -474,6 +499,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     // 10. Game Over Check
     if (ship.hull <= 0) {
       setGameState(GameState.GAME_OVER);
+      audio.playExplosion('large');
     }
 
   }, [gameState, setGameState, syncUI, shipRef, upgradesRef, screenSize]);
@@ -531,19 +557,140 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     }
     ctx.stroke();
 
-    // Draw Station
-    ctx.shadowBlur = 20;
-    ctx.shadowColor = COLOR_STATION;
-    ctx.strokeStyle = COLOR_STATION;
-    ctx.lineWidth = 3;
+    // --- DRAW STATION (Procedural) ---
+    const time = Date.now();
+    const slowRot = time * 0.0002;
+    const medRot = time * 0.0005;
+
+    // 1. Docking Boundary (The logic check uses STATION_RADIUS + SHIP_RADIUS)
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([10, 10]);
     ctx.beginPath();
     ctx.arc(0, 0, STATION_RADIUS, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 2. Rotating Hab Ring
+    ctx.save();
+    ctx.rotate(slowRot);
     
-    ctx.font = '20px monospace';
+    // Connecting Spokes
+    ctx.strokeStyle = '#334155'; // Dark Slate
+    ctx.lineWidth = 8;
+    for(let i=0; i<3; i++) {
+        const angle = (i * Math.PI * 2) / 3;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(angle) * 100, Math.sin(angle) * 100);
+        ctx.stroke();
+    }
+
+    // Main Ring
+    ctx.strokeStyle = '#475569'; // Slate 600
+    ctx.lineWidth = 24;
+    ctx.beginPath();
+    ctx.arc(0, 0, 100, 0, Math.PI * 2); // Radius 100
+    ctx.stroke();
+    
+    // Ring Detail (Panels)
+    ctx.strokeStyle = '#1e293b'; // Slate 800
+    ctx.lineWidth = 2;
+    for(let i=0; i<12; i++) {
+        const angle = (i * Math.PI * 2) / 12;
+        const x1 = Math.cos(angle) * 88;
+        const y1 = Math.sin(angle) * 88;
+        const x2 = Math.cos(angle) * 112;
+        const y2 = Math.sin(angle) * 112;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+    }
+    
+    // Lights on Ring
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = COLOR_STATION; // Yellow glow
     ctx.fillStyle = COLOR_STATION;
+    for(let i=0; i<6; i++) {
+        const angle = (i * Math.PI * 2) / 6 + (Math.PI/6); // Offset
+        const x = Math.cos(angle) * 100;
+        const y = Math.sin(angle) * 100;
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+    ctx.restore();
+
+    // 3. Central Core (Command)
+    ctx.fillStyle = '#0f172a'; // Deep slate
+    ctx.strokeStyle = '#94a3b8'; // Light slate border
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, 40, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Windows in Core
+    ctx.fillStyle = '#bae6fd'; // Light Blue
+    ctx.shadowColor = '#bae6fd';
+    ctx.shadowBlur = 5;
+    const coreTime = Math.floor(time / 500); 
+    const winSize = 6;
+    
+    // Grid of windows
+    for(let i=-2; i<=2; i++) {
+        for(let j=-2; j<=2; j++) {
+            if (Math.abs(i) + Math.abs(j) < 4) { 
+                if ((i+j+coreTime) % 7 !== 0) { // Blink pattern
+                    ctx.fillRect(i*10 - winSize/2, j*10 - winSize/2, winSize, winSize);
+                }
+            }
+        }
+    }
+    ctx.shadowBlur = 0;
+
+    // 4. Rotating Radar/Antennae (Fast, counter-rotate)
+    ctx.save();
+    ctx.rotate(-medRot * 2);
+    
+    // Dish
+    ctx.strokeStyle = '#64748b';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, -60, 10, 0, Math.PI); // Half circle dish
+    ctx.stroke();
+    // Arm to dish
+    ctx.beginPath();
+    ctx.moveTo(0, -40);
+    ctx.lineTo(0, -60);
+    ctx.stroke();
+    
+    // Long Antenna
+    ctx.beginPath();
+    ctx.moveTo(0, 40);
+    ctx.lineTo(0, 80);
+    ctx.stroke();
+    
+    // Blinking red light at tip
+    if (Math.floor(time / 200) % 2 === 0) {
+        ctx.fillStyle = '#ef4444';
+        ctx.shadowColor = '#ef4444';
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(0, 80, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+    ctx.restore();
+
+    // Label
+    ctx.font = 'bold 16px monospace';
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.7)';
     ctx.textAlign = 'center';
-    ctx.fillText('STATION HUB', 0, 0);
+    ctx.fillText('STATION HUB', 0, 140);
+
 
     // Draw Particles
     particlesRef.current.forEach(p => {
@@ -857,7 +1004,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
              timer: 180, // ~3 seconds at 60fps
              state: 'ARMED'
           });
+          audio.playMineArmed();
           syncUI();
+        } else {
+            audio.playUI('error');
         }
       }
     };

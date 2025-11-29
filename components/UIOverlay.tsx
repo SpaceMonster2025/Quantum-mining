@@ -1,6 +1,7 @@
 import React from 'react';
 import { GameState, Ship, Upgrades } from '../types';
 import { UPGRADE_COST_BASE, UPGRADE_COST_MULTIPLIER, ORE_VALUE } from '../constants';
+import { audio } from '../utils/audio';
 
 interface UIOverlayProps {
   gameState: GameState;
@@ -21,6 +22,10 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
   const getCost = (level: number) => Math.floor(UPGRADE_COST_BASE * Math.pow(UPGRADE_COST_MULTIPLIER, level - 1));
   const repairCost = Math.floor((ship.maxHull - ship.hull) * 2);
   const ammoCost = 50;
+
+  const playClick = () => audio.playUI('click');
+  const playBuy = () => audio.playUI('buy');
+  const playError = () => audio.playUI('error');
 
   // Render HUD
   if (gameState === GameState.PLAYING) {
@@ -105,7 +110,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
             <h2 className="text-xl font-bold text-white">MAINTENANCE</h2>
             
             <button 
-              onClick={onSellOre}
+              onClick={() => { playBuy(); onSellOre(); }}
               disabled={ship.cargo === 0}
               className="w-full p-4 bg-green-900/50 border border-green-500 text-green-400 hover:bg-green-900 transition flex justify-between items-center disabled:opacity-50"
             >
@@ -114,7 +119,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
             </button>
 
             <button 
-              onClick={onRepair}
+              onClick={() => { playBuy(); onRepair(); }}
               disabled={ship.hull >= ship.maxHull || ship.credits < repairCost}
               className="w-full p-4 bg-blue-900/50 border border-blue-500 text-blue-400 hover:bg-blue-900 transition flex justify-between items-center disabled:opacity-50"
             >
@@ -123,7 +128,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
             </button>
 
             <button 
-              onClick={onBuyAmmo}
+              onClick={() => { playBuy(); onBuyAmmo(); }}
               disabled={ship.credits < ammoCost}
               className="w-full p-4 bg-red-900/50 border border-red-500 text-red-400 hover:bg-red-900 transition flex justify-between items-center disabled:opacity-50"
             >
@@ -133,7 +138,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
             
             <div className="pt-8">
               <button 
-                onClick={onUndock}
+                onClick={() => { playClick(); onUndock(); }}
                 className="w-full py-6 text-xl font-bold bg-yellow-600 hover:bg-yellow-500 text-black uppercase tracking-widest clip-corner"
               >
                 UNDOCK & LAUNCH
@@ -163,7 +168,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
                     </div>
                     <div className="text-xs text-slate-400 mb-2">{u.desc}</div>
                     <button 
-                      onClick={() => onUpgrade(u.id as keyof Upgrades)}
+                      onClick={() => { canAfford ? playBuy() : playError(); onUpgrade(u.id as keyof Upgrades); }}
                       disabled={!canAfford}
                       className="w-full py-1 bg-slate-700 hover:bg-cyan-700 disabled:opacity-30 disabled:hover:bg-slate-700 text-xs uppercase"
                     >
@@ -201,7 +206,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
          </div>
 
          <button 
-           onClick={onStartGame}
+           onClick={() => { playClick(); onStartGame(); }}
            className="px-12 py-4 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xl rounded-none border-2 border-purple-400 shadow-[0_0_20px_rgba(168,85,247,0.5)] transition"
          >
            {gameState === GameState.GAME_OVER ? 'REBOOT SYSTEM' : 'INITIATE LAUNCH SEQUENCE'}
