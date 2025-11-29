@@ -908,8 +908,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
 
   // Spawn / Reset Logic
   useEffect(() => {
-    // Re-init on Game Start (from Menu)
-    if (gameState === GameState.PLAYING && prevGameState.current !== GameState.PLAYING) {
+    // Re-init on Game Start (from Menu or Game Over ONLY)
+    if (gameState === GameState.PLAYING && (prevGameState.current === GameState.MENU || prevGameState.current === GameState.GAME_OVER)) {
         initGame();
     }
     // Re-init on Sector Change
