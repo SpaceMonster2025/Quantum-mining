@@ -9,6 +9,7 @@ import { audio } from './utils/audio';
 
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>(GameState.MENU);
+  const [sector, setSector] = useState(1);
   
   // Game State Refs (Single source of truth passed to canvas)
   const shipRef = useRef<Ship>({
@@ -37,6 +38,7 @@ const App: React.FC = () => {
 
     // Reset core stats if coming from menu/gameover
     if (gameState === GameState.GAME_OVER || gameState === GameState.MENU) {
+       setSector(1);
        shipRef.current.credits = STARTING_CREDITS;
        shipRef.current.ammo = STARTING_AMMO;
        // Reset upgrades
@@ -51,6 +53,11 @@ const App: React.FC = () => {
        shipRef.current.shield = shipRef.current.maxShield;
     }
     setGameState(GameState.PLAYING);
+  };
+
+  const handleSectorComplete = () => {
+    setSector(s => s + 1);
+    audio.playUI('buy'); // Positive sound for progress
   };
 
   const handleUndock = () => {
@@ -128,11 +135,14 @@ const App: React.FC = () => {
         shipRef={shipRef}
         upgradesRef={upgradesRef}
         syncUI={syncUI}
+        sector={sector}
+        onSectorComplete={handleSectorComplete}
       />
       <UIOverlay 
         gameState={gameState}
         ship={shipRef.current}
         upgrades={upgradesRef.current}
+        sector={sector}
         onStartGame={handleStartGame}
         onUndock={handleUndock}
         onSellOre={handleSellOre}

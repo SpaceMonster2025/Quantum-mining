@@ -5,8 +5,7 @@ import {
   MAX_SPEED, LASER_RANGE, SHIP_RADIUS, MINE_PUCKER_DURATION, MINE_BLAST_RADIUS,
   COLOR_ORE, COLOR_TITAN, COLOR_CHUNK, COLOR_DANGER, COLOR_SHIP, COLOR_THRUST,
   STATION_RADIUS, COLOR_STATION, COLOR_SHIELD, MINE_PUCKER_FORCE, MINE_BLAST_FORCE,
-  TITAN_RADIUS, CHUNK_RADIUS, ORE_RADIUS, UPGRADE_COST_BASE, UPGRADE_COST_MULTIPLIER,
-  COLOR_LASER
+  TITAN_RADIUS, CHUNK_RADIUS, ORE_RADIUS, VOLATILE_RADIUS, COLOR_VOLATILE, COLOR_LASER
 } from '../constants';
 import { distance, randomRange, checkCollision, generatePolygonOffsets } from '../utils/physics';
 import { audio } from '../utils/audio';
@@ -17,12 +16,17 @@ interface GameCanvasProps {
   shipRef: React.MutableRefObject<Ship>;
   upgradesRef: React.MutableRefObject<Upgrades>;
   syncUI: () => void;
+  sector: number;
+  onSectorComplete: () => void;
 }
 
-const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRef, upgradesRef, syncUI }) => {
+const GameCanvas: React.FC<GameCanvasProps> = ({ 
+  gameState, setGameState, shipRef, upgradesRef, syncUI, sector, onSectorComplete 
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
   const prevGameState = useRef<GameState>(gameState);
+  const prevSector = useRef<number>(sector);
   
   // Track window size dynamically
   const [screenSize, setScreenSize] = useState({ width: window.innerWidth, height: window.innerHeight });
@@ -35,6 +39,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
   const shakeRef = useRef<number>(0); // Screen shake magnitude
   const keysPressed = useRef<Set<string>>(new Set());
   const mouseRef = useRef({ x: 0, y: 0, down: false, rightDown: false });
+  const levelInitialAsteroids = useRef<number>(0);
   
   // Laser State for separation of logic/render
   const laserRef = useRef({ active: false, x: 0, y: 0, length: 0, angle: 0 });
@@ -42,19 +47,39 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
   // --- Initialization ---
 
   const spawnAsteroid = (tier: AsteroidTier, x: number, y: number, vx: number, vy: number) => {
-    const size = tier === AsteroidTier.TITAN ? TITAN_RADIUS : (tier === AsteroidTier.CHUNK ? CHUNK_RADIUS : ORE_RADIUS);
-    const hp = tier === AsteroidTier.TITAN ? 1000 : (tier === AsteroidTier.CHUNK ? 50 : 1);
-    
+    let size = ORE_RADIUS;
+    let color = COLOR_ORE;
+    let hp = 1;
+    let sides = 8;
+    let variance = 0.2;
+
+    if (tier === AsteroidTier.TITAN) {
+        size = TITAN_RADIUS;
+        color = COLOR_TITAN;
+        hp = 1000;
+        sides = 12;
+    } else if (tier === AsteroidTier.VOLATILE) {
+        size = VOLATILE_RADIUS;
+        color = COLOR_VOLATILE;
+        hp = 800;
+        sides = 10;
+        variance = 0.4; // Spikier
+    } else if (tier === AsteroidTier.CHUNK) {
+        size = CHUNK_RADIUS;
+        color = COLOR_CHUNK;
+        hp = 50;
+    }
+
     asteroidsRef.current.push({
       id: Math.random().toString(36).substr(2, 9),
       x, y, vx, vy,
       radius: size,
       angle: Math.random() * Math.PI * 2,
-      color: tier === AsteroidTier.TITAN ? COLOR_TITAN : (tier === AsteroidTier.CHUNK ? COLOR_CHUNK : COLOR_ORE),
+      color,
       tier,
       hp,
       rotationSpeed: randomRange(-0.02, 0.02),
-      shape: generatePolygonOffsets(tier === AsteroidTier.TITAN ? 12 : 8, 0.2)
+      shape: generatePolygonOffsets(sides, variance)
     });
   };
 
@@ -63,11 +88,26 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     // Visual Dust
     spawnParticles(ast.x, ast.y, ast.color, 8, 2, 25);
     
-    // Audio
-    if (ast.tier === AsteroidTier.TITAN) audio.playExplosion('large');
-    else audio.playExplosion('small');
-
-    if (ast.tier === AsteroidTier.TITAN) {
+    if (ast.tier === AsteroidTier.VOLATILE) {
+        // Volatile Explosion
+        audio.playExplosion('large');
+        shakeRef.current += 15;
+        
+        // Spawn FAST chunks (dangerous shrapnel)
+        const chunkCount = 8;
+        for (let i = 0; i < chunkCount; i++) {
+            const angle = randomRange(0, Math.PI * 2);
+            const speed = randomRange(8, 14); // High velocity!
+            spawnAsteroid(
+              AsteroidTier.CHUNK,
+              ast.x + Math.cos(angle) * 10,
+              ast.y + Math.sin(angle) * 10,
+              impactVx * 0.3 + Math.cos(angle) * speed,
+              impactVy * 0.3 + Math.sin(angle) * speed
+            );
+        }
+    } else if (ast.tier === AsteroidTier.TITAN) {
+      audio.playExplosion('large');
       // Titan -> Chunks
       for (let i = 0; i < 5; i++) {
         const angle = randomRange(0, Math.PI * 2);
@@ -81,8 +121,9 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
         );
       }
     } else if (ast.tier === AsteroidTier.CHUNK) {
+      audio.playExplosion('small');
       // Chunk -> Ore
-      const oreCount = 25; // 5x Loot: Increased from 5 to 25
+      const oreCount = 10; 
       for (let i = 0; i < oreCount; i++) {
         const angle = randomRange(0, Math.PI * 2);
         const speed = randomRange(2, 5);
@@ -98,14 +139,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
   };
 
   const initGame = useCallback(() => {
-    // Reset Ship
+    // Reset Ship physics only, keep upgrades/credits
     shipRef.current = {
       ...shipRef.current,
-      x: 0, y: 0, vx: 0, vy: -4, angle: -Math.PI / 2, // Launch upwards with velocity to avoid instant dock
-      hull: shipRef.current.maxHull,
-      shield: shipRef.current.maxShield,
-      cargo: 0,
-      invulnerableTimer: 0
+      x: 0, y: 0, vx: 0, vy: -4, angle: -Math.PI / 2, 
+      invulnerableTimer: 60 // Brief iframe on spawn
     };
     
     asteroidsRef.current = [];
@@ -114,9 +152,33 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     cameraRef.current.zoom = 0.8;
     shakeRef.current = 0;
 
-    // Spawn Field
-    for (let i = 0; i < 20; i++) {
-      const dist = randomRange(500, 3000);
+    // Difficulty Scaling based on Sector
+    const baseCount = 20;
+    const additionalCount = Math.floor(sector * 1.5);
+    const volatileCount = Math.floor((sector - 1) * 2); // Sector 1: 0, Sector 2: 2, etc.
+    const titanCount = Math.max(5, baseCount + additionalCount - volatileCount);
+    
+    // Total trackable targets (Volatile + Titan)
+    // Ore and Chunks don't count towards sector completion logic usually, 
+    // but the prompt says "depleted". Let's track big rocks.
+    levelInitialAsteroids.current = volatileCount + titanCount;
+
+    // Spawn Volatiles
+    for (let i = 0; i < volatileCount; i++) {
+        const dist = randomRange(800, 3000 + (sector * 200));
+        const theta = Math.random() * Math.PI * 2;
+        spawnAsteroid(
+            AsteroidTier.VOLATILE,
+            Math.cos(theta) * dist,
+            Math.sin(theta) * dist,
+            randomRange(-0.8, 0.8), // Slightly faster
+            randomRange(-0.8, 0.8)
+        );
+    }
+
+    // Spawn Titans
+    for (let i = 0; i < titanCount; i++) {
+      const dist = randomRange(500, 3000 + (sector * 200));
       const theta = Math.random() * Math.PI * 2;
       spawnAsteroid(
         AsteroidTier.TITAN,
@@ -126,7 +188,15 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
         randomRange(-0.5, 0.5)
       );
     }
-  }, [shipRef]);
+    
+    // Spawn some ambient Ore for immediate engagement
+    for(let i=0; i<10; i++) {
+        const dist = randomRange(400, 1000);
+        const theta = Math.random() * Math.PI * 2;
+        spawnAsteroid(AsteroidTier.ORE, Math.cos(theta)*dist, Math.sin(theta)*dist, 0,0);
+    }
+
+  }, [shipRef, sector]);
 
   // --- Particles ---
 
@@ -177,7 +247,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       audio.setThrust(true);
       // Thruster particles
       spawnParticles(
-        ship.x - Math.cos(ship.angle) * 20, // Moved back slightly for new ship model
+        ship.x - Math.cos(ship.angle) * 20, 
         ship.y - Math.sin(ship.angle) * 20, 
         COLOR_THRUST, 1, 1, 15
       );
@@ -186,9 +256,35 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       audio.setThrust(false);
     }
 
+    // Reverse Thrust (S)
     if (keysPressed.current.has('s') || keysPressed.current.has('arrowdown')) {
-      ship.vx *= 0.95;
-      ship.vy *= 0.95;
+       const reverseAccel = (SHIP_ACCEL + (upgrades.engineLevel * 0.02)) * 0.5;
+       ship.vx -= Math.cos(ship.angle) * reverseAccel;
+       ship.vy -= Math.sin(ship.angle) * reverseAccel;
+       
+       // Reverse Thruster Particles
+       spawnParticles(
+         ship.x + Math.cos(ship.angle) * 15 + Math.cos(ship.angle + Math.PI/2) * 10, 
+         ship.y + Math.sin(ship.angle) * 15 + Math.sin(ship.angle + Math.PI/2) * 10, 
+         '#94a3b8', 1, 0.5, 8
+       );
+       spawnParticles(
+         ship.x + Math.cos(ship.angle) * 15 + Math.cos(ship.angle - Math.PI/2) * 10, 
+         ship.y + Math.sin(ship.angle) * 15 + Math.sin(ship.angle - Math.PI/2) * 10, 
+         '#94a3b8', 1, 0.5, 8
+       );
+    }
+
+    // Space Brake (Q)
+    if (keysPressed.current.has('q')) {
+        ship.vx *= 0.9;
+        ship.vy *= 0.9;
+        if (Math.abs(ship.vx) < 0.01) ship.vx = 0;
+        if (Math.abs(ship.vy) < 0.01) ship.vy = 0;
+        
+        if (Math.random() > 0.8 && (Math.abs(ship.vx) > 0.1 || Math.abs(ship.vy) > 0.1)) {
+           spawnParticles(ship.x, ship.y, '#64748b', 1, 1, 5);
+        }
     }
 
     const rotSpeed = SHIP_ROTATION_SPEED + (upgrades.handlingLevel * 0.01);
@@ -210,9 +306,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     ship.y += ship.vy;
 
     // 2. Camera Follow with Zoom
-    // To keep ship centered:
-    // ScreenCenter = (ShipPos - CameraPos) * Zoom
-    // CameraPos = ShipPos - (ScreenCenter / Zoom)
     const zoom = cameraRef.current.zoom;
     cameraRef.current.x = ship.x - (screenSize.width / 2) / zoom;
     cameraRef.current.y = ship.y - (screenSize.height / 2) / zoom;
@@ -228,7 +321,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       const dy = mouseRef.current.y - centerY;
       const aimAngle = Math.atan2(dy, dx);
       
-      // Default to max range
       laserRef.current = {
           active: true,
           x: ship.x,
@@ -238,25 +330,18 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       };
       
       let closestAst: Asteroid | null = null;
-      let closestDist = LASER_RANGE; // Start with max range
+      let closestDist = LASER_RANGE;
       const laserPower = 1 + (upgrades.laserLevel * 0.5);
 
       asteroidsRef.current.forEach(ast => {
-        // Ignore Titans (needs bombs) and Ore (indestructible/loot)
-        if (ast.tier === AsteroidTier.TITAN || ast.tier === AsteroidTier.ORE) return;
-
+        if (ast.tier === AsteroidTier.TITAN || ast.tier === AsteroidTier.VOLATILE || ast.tier === AsteroidTier.ORE) return;
         const dToAst = distance({x: ship.x, y: ship.y}, ast);
-        
-        // Broad check first (range + radius)
         if (dToAst < LASER_RANGE + ast.radius) {
           const angleToAst = Math.atan2(ast.y - ship.y, ast.x - ship.x);
           let angleDiff = angleToAst - aimAngle;
           while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
           while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-
-          // Cone check (approx 22 degrees total width)
           if (Math.abs(angleDiff) < 0.2) {
-             // We want the CLOSEST asteroid
              if (dToAst < closestDist) {
                  closestDist = dToAst;
                  closestAst = ast;
@@ -269,40 +354,28 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
          const ast = closestAst as Asteroid;
          const wasAlive = ast.hp > 0;
          ast.hp -= laserPower;
-         
-         // Visuals: Stop laser at surface (approximate with radius)
          const impactDist = Math.max(0, closestDist - ast.radius);
          laserRef.current.length = impactDist;
-         
          const impactX = ship.x + Math.cos(aimAngle) * impactDist;
          const impactY = ship.y + Math.sin(aimAngle) * impactDist;
-
          spawnParticles(impactX, impactY, COLOR_ORE, 2, 2, 10);
-         
-         if (wasAlive && ast.hp <= 0) {
-           breakAsteroid(ast, 0, 0); 
-         }
+         if (wasAlive && ast.hp <= 0) breakAsteroid(ast, 0, 0); 
       }
-
       asteroidsRef.current = asteroidsRef.current.filter(a => a.hp > 0);
     }
 
-    // 4. Tractor Beam (Right Mouse)
+    // 4. Tractor Beam
     audio.setTractor(mouseRef.current.rightDown);
     if (mouseRef.current.rightDown) {
       const TRACTOR_RANGE = 500;
       const TRACTOR_FORCE = 0.5;
-
       asteroidsRef.current.forEach(ast => {
         if (ast.tier === AsteroidTier.ORE) {
           const dist = distance(ship, ast);
           if (dist < TRACTOR_RANGE) {
             const angle = Math.atan2(ship.y - ast.y, ship.x - ast.x);
-            // Apply suction force
             ast.vx += Math.cos(angle) * TRACTOR_FORCE;
             ast.vy += Math.sin(angle) * TRACTOR_FORCE;
-            
-            // Subtle random wiggle to make it look like a magnetic field
             ast.vx += randomRange(-0.2, 0.2);
             ast.vy += randomRange(-0.2, 0.2);
           }
@@ -313,14 +386,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     // 5. Mines
     minesRef.current.forEach(mine => {
       mine.timer--;
-      
-      if (mine.timer === MINE_PUCKER_DURATION) {
-          audio.playMinePucker();
-      }
+      if (mine.timer === MINE_PUCKER_DURATION) audio.playMinePucker();
       
       if (mine.timer > 0 && mine.timer < MINE_PUCKER_DURATION) {
         mine.state = 'PUCKER';
-        // Physics Pull
         asteroidsRef.current.forEach(ast => {
           const d = distance(mine, ast);
           if (d < MINE_BLAST_RADIUS * 1.5) {
@@ -335,9 +404,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
           ship.vx += Math.cos(angle) * MINE_PUCKER_FORCE * 0.5;
           ship.vy += Math.sin(angle) * MINE_PUCKER_FORCE * 0.5;
         }
-
-        // VISUAL: Implosion Particles (Suction)
-        // Spawn particles at blast radius moving INWARD
+        // Suction Particles
         for(let i=0; i<3; i++) {
            const angle = Math.random() * Math.PI * 2;
            const dist = MINE_BLAST_RADIUS * (0.8 + Math.random() * 0.4);
@@ -347,64 +414,34 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
            particlesRef.current.push({
                id: Math.random().toString(),
                x: px, y: py,
-               vx: -Math.cos(angle) * speed, // Move Inwards
+               vx: -Math.cos(angle) * speed,
                vy: -Math.sin(angle) * speed,
                radius: randomRange(1, 2),
                color: Math.random() > 0.5 ? '#ffffff' : COLOR_DANGER,
-               angle: 0,
-               life: 30,
-               maxLife: 30,
-               decay: 1
+               angle: 0, life: 30, maxLife: 30, decay: 1
            });
         }
-
       } else if (mine.timer <= 0) {
         mine.state = 'DETONATING';
-        
         audio.playExplosion('large');
-
-        // TRIGGER SCREEN SHAKE
         shakeRef.current = 25;
-
-        // VISUAL: Massive Explosion
-        // 1. Fast Sparks (Fire)
+        // Visual Explosion
         spawnParticles(mine.x, mine.y, COLOR_DANGER, 60, 15, 45);
-        spawnParticles(mine.x, mine.y, '#fbbf24', 40, 12, 40); // Amber
-        spawnParticles(mine.x, mine.y, '#ffffff', 20, 18, 25); // White center
-
-        // 2. Heavy Dust/Debris (Implosion Remnants)
-        // Slower, larger, grey particles
-        for(let i=0; i<50; i++) {
-          const angle = Math.random() * Math.PI * 2;
-          const speed = randomRange(2, 6);
-          particlesRef.current.push({
-             id: Math.random().toString(),
-             x: mine.x, y: mine.y,
-             vx: Math.cos(angle) * speed,
-             vy: Math.sin(angle) * speed,
-             radius: randomRange(3, 8),
-             color: '#475569', // Slate 600 (Dust)
-             angle: 0,
-             life: randomRange(60, 120), // Long life
-             maxLife: 120,
-             decay: 1
-          });
-        }
+        spawnParticles(mine.x, mine.y, '#fbbf24', 40, 12, 40);
+        spawnParticles(mine.x, mine.y, '#ffffff', 20, 18, 25);
         
         asteroidsRef.current.forEach(ast => {
           const d = distance(mine, ast);
           if (d < MINE_BLAST_RADIUS) {
             const angle = Math.atan2(ast.y - mine.y, ast.x - mine.x);
             const force = MINE_BLAST_FORCE * (1 - d/MINE_BLAST_RADIUS);
-            
-            // Apply impulse
             ast.vx += Math.cos(angle) * force;
             ast.vy += Math.sin(angle) * force;
 
             const wasAlive = ast.hp > 0;
-            if (ast.tier === AsteroidTier.TITAN) {
-               ast.hp = 0;
-            } else if (ast.tier !== AsteroidTier.ORE) { // Ore is indestructible to blasts
+            if (ast.tier === AsteroidTier.TITAN || ast.tier === AsteroidTier.VOLATILE) {
+               ast.hp = 0; // Destroy Titans/Volatiles instantly
+            } else if (ast.tier !== AsteroidTier.ORE) {
                ast.hp -= 100;
             }
 
@@ -420,7 +457,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
           const force = MINE_BLAST_FORCE * 1.5 * (1 - dShip/MINE_BLAST_RADIUS);
           ship.vx += Math.cos(angle) * force;
           ship.vy += Math.sin(angle) * force;
-          
           if (ship.invulnerableTimer <= 0) {
              if (ship.shield > 0) {
                 ship.shield = 0;
@@ -438,14 +474,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     minesRef.current = minesRef.current.filter(m => m.state !== 'DETONATING');
     asteroidsRef.current = asteroidsRef.current.filter(a => a.hp > 0);
 
-
     // 6. Asteroid Physics & Collision
+    let titansLeft = 0;
+
     asteroidsRef.current.forEach(ast => {
       ast.x += ast.vx;
       ast.y += ast.vy;
       ast.angle += ast.rotationSpeed;
       ast.vx *= 0.99;
       ast.vy *= 0.99;
+
+      if (ast.tier === AsteroidTier.TITAN || ast.tier === AsteroidTier.VOLATILE) {
+          titansLeft++;
+      }
 
       if (checkCollision(ship, ast)) {
         if (ast.tier === AsteroidTier.ORE) {
@@ -458,18 +499,21 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
         } else {
           if (ship.invulnerableTimer <= 0) {
              const vRel = Math.sqrt(Math.pow(ship.vx - ast.vx, 2) + Math.pow(ship.vy - ast.vy, 2));
-             if (vRel > 2) {
-               shakeRef.current = 5; // Small shake on impact
+             // Higher damage threshold for collision, Volatiles always hurt or Chunks moving fast
+             if (vRel > 2 || ast.tier === AsteroidTier.VOLATILE) {
+               shakeRef.current = 5;
                if (ship.shield > 0) {
                   ship.shield = 0;
                } else {
-                  const damage = ast.tier === AsteroidTier.TITAN ? 100 : 20;
+                  let damage = 20;
+                  if (ast.tier === AsteroidTier.TITAN) damage = 100;
+                  if (ast.tier === AsteroidTier.VOLATILE) damage = 150; // Dangerous
                   ship.hull -= damage;
                }
                ship.invulnerableTimer = 60;
                const angle = Math.atan2(ship.y - ast.y, ship.x - ast.x);
-               ship.vx += Math.cos(angle) * 5;
-               ship.vy += Math.sin(angle) * 5;
+               ship.vx += Math.cos(angle) * 8; // Bounce hard
+               ship.vy += Math.sin(angle) * 8;
                audio.playExplosion('small');
                syncUI();
              }
@@ -478,11 +522,21 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       }
     });
 
+    // 6b. Sector Completion Check
+    // If < 10% of initial big asteroids remain
+    if (levelInitialAsteroids.current > 0 && titansLeft <= levelInitialAsteroids.current * 0.1) {
+        // Only trigger once per level
+        if (sector === prevSector.current) {
+            onSectorComplete();
+            // prevSector will be updated in the effect loop next cycle
+        }
+    }
+
     // 7. Station Docking
     const distToStation = distance({x:0, y:0}, ship);
     if (distToStation < STATION_RADIUS + SHIP_RADIUS && Math.abs(ship.vx) < 1 && Math.abs(ship.vy) < 1) {
        setGameState(GameState.DOCKED);
-       audio.playUI('buy'); // Nice chime on dock
+       audio.playUI('buy'); 
     }
 
     // 8. Particles
@@ -493,16 +547,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     });
     particlesRef.current = particlesRef.current.filter(p => p.life > 0);
 
-    // 9. Timers
     if (ship.invulnerableTimer > 0) ship.invulnerableTimer--;
-
-    // 10. Game Over Check
     if (ship.hull <= 0) {
       setGameState(GameState.GAME_OVER);
       audio.playExplosion('large');
     }
 
-  }, [gameState, setGameState, syncUI, shipRef, upgradesRef, screenSize]);
+  }, [gameState, setGameState, syncUI, shipRef, upgradesRef, screenSize, sector, onSectorComplete]);
 
   // --- Render Loop ---
   const draw = useCallback(() => {
@@ -519,31 +570,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     const shake = shakeRef.current;
 
     ctx.save();
-    
-    // Apply Camera & Zoom & Shake
     ctx.scale(zoom, zoom);
-    
-    // Calculate Shake Offset
     const shakeX = (Math.random() - 0.5) * shake;
     const shakeY = (Math.random() - 0.5) * shake;
+    ctx.translate(-cameraRef.current.x + shakeX, -cameraRef.current.y + shakeY);
 
-    ctx.translate(
-        -cameraRef.current.x + shakeX, 
-        -cameraRef.current.y + shakeY
-    );
-
-    // Draw Grid (World Reference) - Adjusted for Viewport bounds in world space
+    // Grid
     ctx.strokeStyle = '#1a1a1a';
     ctx.lineWidth = 1;
     ctx.beginPath();
     const gridSize = 200;
-    
-    // Calculate visible world bounds
     const worldLeft = cameraRef.current.x;
     const worldTop = cameraRef.current.y;
     const worldWidth = screenSize.width / zoom;
     const worldHeight = screenSize.height / zoom;
-
     const startX = Math.floor(worldLeft / gridSize) * gridSize;
     const startY = Math.floor(worldTop / gridSize) * gridSize;
     
@@ -557,12 +597,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     }
     ctx.stroke();
 
-    // --- DRAW STATION (Procedural) ---
+    // Station (Procedural)
     const time = Date.now();
     const slowRot = time * 0.0002;
     const medRot = time * 0.0005;
 
-    // 1. Docking Boundary (The logic check uses STATION_RADIUS + SHIP_RADIUS)
     ctx.strokeStyle = 'rgba(250, 204, 21, 0.3)';
     ctx.lineWidth = 1;
     ctx.setLineDash([10, 10]);
@@ -571,180 +610,95 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // 2. Rotating Hab Ring
     ctx.save();
     ctx.rotate(slowRot);
-    
-    // Connecting Spokes
-    ctx.strokeStyle = '#334155'; // Dark Slate
+    ctx.strokeStyle = '#334155';
     ctx.lineWidth = 8;
     for(let i=0; i<3; i++) {
         const angle = (i * Math.PI * 2) / 3;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(Math.cos(angle) * 100, Math.sin(angle) * 100);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(angle) * 100, Math.sin(angle) * 100); ctx.stroke();
     }
-
-    // Main Ring
-    ctx.strokeStyle = '#475569'; // Slate 600
-    ctx.lineWidth = 24;
-    ctx.beginPath();
-    ctx.arc(0, 0, 100, 0, Math.PI * 2); // Radius 100
-    ctx.stroke();
-    
-    // Ring Detail (Panels)
-    ctx.strokeStyle = '#1e293b'; // Slate 800
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#475569'; ctx.lineWidth = 24; ctx.beginPath(); ctx.arc(0, 0, 100, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 2;
     for(let i=0; i<12; i++) {
         const angle = (i * Math.PI * 2) / 12;
-        const x1 = Math.cos(angle) * 88;
-        const y1 = Math.sin(angle) * 88;
-        const x2 = Math.cos(angle) * 112;
-        const y2 = Math.sin(angle) * 112;
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
+        const x1 = Math.cos(angle) * 88; const y1 = Math.sin(angle) * 88;
+        const x2 = Math.cos(angle) * 112; const y2 = Math.sin(angle) * 112;
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     }
-    
-    // Lights on Ring
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = COLOR_STATION; // Yellow glow
-    ctx.fillStyle = COLOR_STATION;
+    ctx.shadowBlur = 10; ctx.shadowColor = COLOR_STATION; ctx.fillStyle = COLOR_STATION;
     for(let i=0; i<6; i++) {
-        const angle = (i * Math.PI * 2) / 6 + (Math.PI/6); // Offset
-        const x = Math.cos(angle) * 100;
-        const y = Math.sin(angle) * 100;
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fill();
+        const angle = (i * Math.PI * 2) / 6 + (Math.PI/6);
+        const x = Math.cos(angle) * 100; const y = Math.sin(angle) * 100;
+        ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
     }
     ctx.shadowBlur = 0;
     ctx.restore();
 
-    // 3. Central Core (Command)
-    ctx.fillStyle = '#0f172a'; // Deep slate
-    ctx.strokeStyle = '#94a3b8'; // Light slate border
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(0, 0, 40, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    ctx.fillStyle = '#0f172a'; ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(0, 0, 40, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
 
-    // Windows in Core
-    ctx.fillStyle = '#bae6fd'; // Light Blue
-    ctx.shadowColor = '#bae6fd';
-    ctx.shadowBlur = 5;
+    ctx.fillStyle = '#bae6fd'; ctx.shadowColor = '#bae6fd'; ctx.shadowBlur = 5;
     const coreTime = Math.floor(time / 500); 
     const winSize = 6;
-    
-    // Grid of windows
     for(let i=-2; i<=2; i++) {
         for(let j=-2; j<=2; j++) {
             if (Math.abs(i) + Math.abs(j) < 4) { 
-                if ((i+j+coreTime) % 7 !== 0) { // Blink pattern
-                    ctx.fillRect(i*10 - winSize/2, j*10 - winSize/2, winSize, winSize);
-                }
+                if ((i+j+coreTime) % 7 !== 0) ctx.fillRect(i*10 - winSize/2, j*10 - winSize/2, winSize, winSize);
             }
         }
     }
     ctx.shadowBlur = 0;
 
-    // 4. Rotating Radar/Antennae (Fast, counter-rotate)
     ctx.save();
     ctx.rotate(-medRot * 2);
-    
-    // Dish
-    ctx.strokeStyle = '#64748b';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, -60, 10, 0, Math.PI); // Half circle dish
-    ctx.stroke();
-    // Arm to dish
-    ctx.beginPath();
-    ctx.moveTo(0, -40);
-    ctx.lineTo(0, -60);
-    ctx.stroke();
-    
-    // Long Antenna
-    ctx.beginPath();
-    ctx.moveTo(0, 40);
-    ctx.lineTo(0, 80);
-    ctx.stroke();
-    
-    // Blinking red light at tip
+    ctx.strokeStyle = '#64748b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -60, 10, 0, Math.PI); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, -40); ctx.lineTo(0, -60); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, 40); ctx.lineTo(0, 80); ctx.stroke();
     if (Math.floor(time / 200) % 2 === 0) {
-        ctx.fillStyle = '#ef4444';
-        ctx.shadowColor = '#ef4444';
-        ctx.shadowBlur = 8;
-        ctx.beginPath();
-        ctx.arc(0, 80, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#ef4444'; ctx.shadowColor = '#ef4444'; ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.arc(0, 80, 4, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
     }
     ctx.restore();
 
-    // Label
-    ctx.font = 'bold 16px monospace';
-    ctx.fillStyle = 'rgba(250, 204, 21, 0.7)';
-    ctx.textAlign = 'center';
-    ctx.fillText('STATION HUB', 0, 140);
+    ctx.font = 'bold 16px monospace'; ctx.fillStyle = 'rgba(250, 204, 21, 0.7)';
+    ctx.textAlign = 'center'; ctx.fillText('STATION HUB', 0, 140);
 
-
-    // Draw Particles
+    // Particles
     particlesRef.current.forEach(p => {
       ctx.globalAlpha = p.life / p.maxLife;
       ctx.fillStyle = p.color;
-      ctx.shadowBlur = 5;
-      ctx.shadowColor = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.shadowBlur = 5; ctx.shadowColor = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.fill();
     });
     ctx.globalAlpha = 1.0;
 
-    // Draw Mines
+    // Mines
     minesRef.current.forEach(m => {
-      ctx.shadowBlur = 15;
-      ctx.shadowColor = COLOR_DANGER;
-      ctx.fillStyle = COLOR_DANGER;
-      
+      ctx.shadowBlur = 15; ctx.shadowColor = COLOR_DANGER; ctx.fillStyle = COLOR_DANGER;
       let radius = 10;
       if (m.state === 'PUCKER') {
         radius = 5 + Math.random() * 2;
-        ctx.strokeStyle = COLOR_DANGER;
-        ctx.beginPath();
+        ctx.strokeStyle = COLOR_DANGER; ctx.beginPath();
         for(let i=0; i<4; i++) {
            const a = (Date.now() / 100) + (i * Math.PI / 2);
-           ctx.moveTo(m.x + Math.cos(a)*50, m.y + Math.sin(a)*50);
-           ctx.lineTo(m.x, m.y);
+           ctx.moveTo(m.x + Math.cos(a)*50, m.y + Math.sin(a)*50); ctx.lineTo(m.x, m.y);
         }
         ctx.stroke();
       } else if (Math.floor(Date.now() / 200) % 2 === 0) {
         ctx.fillStyle = '#fff';
       }
-
-      ctx.beginPath();
-      ctx.arc(m.x, m.y, radius, 0, Math.PI * 2);
-      ctx.fill();
-      
-      ctx.strokeStyle = 'rgba(239, 68, 68, 0.2)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([5, 5]);
-      ctx.beginPath();
-      ctx.arc(m.x, m.y, MINE_BLAST_RADIUS, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(m.x, m.y, radius, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.2)'; ctx.lineWidth = 1; ctx.setLineDash([5, 5]);
+      ctx.beginPath(); ctx.arc(m.x, m.y, MINE_BLAST_RADIUS, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
     });
 
-    // Draw Asteroids
+    // Asteroids
     asteroidsRef.current.forEach(ast => {
-      ctx.save();
-      ctx.translate(ast.x, ast.y);
-      ctx.rotate(ast.angle);
+      ctx.save(); ctx.translate(ast.x, ast.y); ctx.rotate(ast.angle);
       
-      ctx.shadowBlur = ast.tier === AsteroidTier.ORE ? 10 : 0;
+      ctx.shadowBlur = (ast.tier === AsteroidTier.ORE || ast.tier === AsteroidTier.VOLATILE) ? 10 : 0;
       ctx.shadowColor = ast.color;
       ctx.strokeStyle = ast.color;
       ctx.fillStyle = ast.tier === AsteroidTier.ORE ? ast.color : 'transparent';
@@ -752,297 +706,127 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
 
       ctx.beginPath();
       if (ast.tier === AsteroidTier.ORE) {
-         ctx.arc(0, 0, ast.radius, 0, Math.PI * 2);
-         ctx.fill();
+         ctx.arc(0, 0, ast.radius, 0, Math.PI * 2); ctx.fill();
       } else {
          const sides = ast.shape.length;
          const angleStep = (Math.PI * 2) / sides;
          ctx.moveTo(ast.radius * ast.shape[0], 0);
          for(let i=1; i<sides; i++) {
-           ctx.lineTo(
-             Math.cos(i * angleStep) * ast.radius * ast.shape[i],
-             Math.sin(i * angleStep) * ast.radius * ast.shape[i]
-           );
+           ctx.lineTo(Math.cos(i * angleStep) * ast.radius * ast.shape[i], Math.sin(i * angleStep) * ast.radius * ast.shape[i]);
          }
          ctx.closePath();
          ctx.stroke();
-         
-         if (ast.hp < (ast.tier === AsteroidTier.TITAN ? 1000 : 50)) {
-            ctx.globalAlpha = 0.5;
-            ctx.beginPath();
-            ctx.moveTo(0,0);
-            ctx.lineTo(ast.radius/2, ast.radius/2);
-            ctx.stroke();
-            ctx.globalAlpha = 1;
+
+         if (ast.tier === AsteroidTier.VOLATILE) {
+            // Volatile core pulsation
+            const pulse = 0.5 + Math.sin(Date.now() / 100) * 0.3;
+            ctx.fillStyle = ast.color;
+            ctx.globalAlpha = pulse;
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+         } else if (ast.hp < (ast.tier === AsteroidTier.TITAN ? 1000 : 50)) {
+            ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(ast.radius/2, ast.radius/2); ctx.stroke(); ctx.globalAlpha = 1;
          }
       }
       ctx.restore();
     });
 
-    // Draw Ship
+    // Ship
     const ship = shipRef.current;
-    ctx.save();
-    ctx.translate(ship.x, ship.y);
-    ctx.rotate(ship.angle);
-
-    if (ship.invulnerableTimer > 0 && Math.floor(Date.now() / 100) % 2 === 0) {
-       ctx.globalAlpha = 0.5;
-    }
-
+    ctx.save(); ctx.translate(ship.x, ship.y); ctx.rotate(ship.angle);
+    if (ship.invulnerableTimer > 0 && Math.floor(Date.now() / 100) % 2 === 0) ctx.globalAlpha = 0.5;
     if (ship.shield > 0) {
-      ctx.strokeStyle = COLOR_SHIELD;
-      ctx.shadowColor = COLOR_SHIELD;
-      ctx.shadowBlur = 10;
-      ctx.beginPath();
-      ctx.arc(0, 0, SHIP_RADIUS + 8, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
+      ctx.strokeStyle = COLOR_SHIELD; ctx.shadowColor = COLOR_SHIELD; ctx.shadowBlur = 10;
+      ctx.beginPath(); ctx.arc(0, 0, SHIP_RADIUS + 8, 0, Math.PI * 2); ctx.stroke(); ctx.shadowBlur = 0;
     }
 
-    // -- NEW SHIP MODEL --
-    
-    // 1. Engine Cone (Back)
-    ctx.fillStyle = '#1e293b'; // Dark Slate
-    ctx.strokeStyle = '#64748b'; // Slate Border
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(-8, -5);
-    ctx.lineTo(-16, 0);
-    ctx.lineTo(-8, 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    ctx.fillStyle = '#1e293b'; ctx.strokeStyle = '#64748b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-8, -5); ctx.lineTo(-16, 0); ctx.lineTo(-8, 5); ctx.closePath(); ctx.fill(); ctx.stroke();
 
-    // Engine Glow if thrusting
     if (ship.thrusting) {
-        ctx.fillStyle = '#06b6d4'; // Cyan core
-        ctx.shadowColor = '#06b6d4';
-        ctx.shadowBlur = 15;
-        ctx.beginPath();
-        ctx.moveTo(-14, -3);
-        ctx.lineTo(-24 - Math.random()*5, 0); // Flicker length
-        ctx.lineTo(-14, 3);
-        ctx.fill();
-        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#06b6d4'; ctx.shadowColor = '#06b6d4'; ctx.shadowBlur = 15;
+        ctx.beginPath(); ctx.moveTo(-14, -3); ctx.lineTo(-24 - Math.random()*5, 0); ctx.lineTo(-14, 3); ctx.fill(); ctx.shadowBlur = 0;
     }
-
-    // 2. Cargo Pods (Sides)
-    ctx.fillStyle = '#334155'; // Slate 700
-    ctx.beginPath();
-    // Top Pod
-    ctx.rect(-6, -12, 12, 4);
-    // Bottom Pod
-    ctx.rect(-6, 8, 12, 4);
-    ctx.fill();
-    ctx.stroke();
-
-    // 3. Main Hull (Center Box)
-    ctx.fillStyle = '#475569'; // Slate 600
-    ctx.beginPath();
-    ctx.rect(-8, -8, 16, 16);
-    ctx.fill();
-    ctx.stroke();
+    ctx.fillStyle = '#334155'; ctx.beginPath(); ctx.rect(-6, -12, 12, 4); ctx.rect(-6, 8, 12, 4); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#475569'; ctx.beginPath(); ctx.rect(-8, -8, 16, 16); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#1e293b'; ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(0, 8); ctx.moveTo(-8, 0); ctx.lineTo(8, 0); ctx.stroke(); ctx.strokeStyle = '#64748b';
+    ctx.fillStyle = '#64748b'; ctx.beginPath(); 
+    ctx.moveTo(8, -7); ctx.lineTo(18, -7); ctx.lineTo(18, -3); ctx.lineTo(8, -3);
+    ctx.moveTo(8, 7); ctx.lineTo(18, 7); ctx.lineTo(18, 3); ctx.lineTo(8, 3); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#0ea5e9'; ctx.shadowColor = '#0ea5e9'; ctx.shadowBlur = 5; ctx.beginPath(); ctx.rect(2, -3, 4, 6); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.fillStyle = '#facc15'; ctx.shadowColor = '#facc15'; ctx.shadowBlur = 8; ctx.beginPath();
+    ctx.arc(16, -5, 1, 0, Math.PI*2); ctx.arc(16, 5, 1, 0, Math.PI*2);
+    ctx.rect(-4, -11, 2, 2); ctx.rect(2, -11, 2, 2); ctx.rect(-4, 9, 2, 2); ctx.rect(2, 9, 2, 2); ctx.fill(); ctx.shadowBlur = 0;
     
-    // Hull Details (Lines)
-    ctx.strokeStyle = '#1e293b';
-    ctx.beginPath();
-    ctx.moveTo(0, -8); ctx.lineTo(0, 8); // Center line
-    ctx.moveTo(-8, 0); ctx.lineTo(8, 0); // Cross line
-    ctx.stroke();
-    ctx.strokeStyle = '#64748b'; // Restore border color
-
-    // 4. Forward Arms (Pincers)
-    ctx.fillStyle = '#64748b'; // Slate 500
-    ctx.beginPath();
-    // Top Arm
-    ctx.moveTo(8, -7);
-    ctx.lineTo(18, -7);
-    ctx.lineTo(18, -3);
-    ctx.lineTo(8, -3);
-    // Bottom Arm
-    ctx.moveTo(8, 7);
-    ctx.lineTo(18, 7);
-    ctx.lineTo(18, 3);
-    ctx.lineTo(8, 3);
-    ctx.fill();
-    ctx.stroke();
-
-    // 5. Cockpit / Window
-    ctx.fillStyle = '#0ea5e9'; // Sky Blue
-    ctx.shadowColor = '#0ea5e9';
-    ctx.shadowBlur = 5;
-    ctx.beginPath();
-    ctx.rect(2, -3, 4, 6);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-
-    // 6. Glowing Yellow Lights
-    ctx.fillStyle = '#facc15'; // Yellow
-    ctx.shadowColor = '#facc15';
-    ctx.shadowBlur = 8;
-    ctx.beginPath();
-    // Arm tips
-    ctx.arc(16, -5, 1, 0, Math.PI*2);
-    ctx.arc(16, 5, 1, 0, Math.PI*2);
-    // Cargo Pod Lights
-    ctx.rect(-4, -11, 2, 2);
-    ctx.rect(2, -11, 2, 2);
-    ctx.rect(-4, 9, 2, 2);
-    ctx.rect(2, 9, 2, 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-
-    // -- END NEW SHIP MODEL --
-    
-    // Draw Tractor Beam Effect
     if (mouseRef.current.rightDown) {
-       ctx.strokeStyle = 'rgba(74, 222, 128, 0.2)'; // Green tint
-       ctx.lineWidth = 1;
-       ctx.beginPath();
-       const pulse = 500 + Math.sin(Date.now() / 100) * 20;
-       ctx.arc(0, 0, pulse, 0, Math.PI * 2);
-       ctx.stroke();
-       
-       ctx.fillStyle = 'rgba(74, 222, 128, 0.05)';
-       ctx.fill();
+       ctx.strokeStyle = 'rgba(74, 222, 128, 0.2)'; ctx.lineWidth = 1; ctx.beginPath();
+       const pulse = 500 + Math.sin(Date.now() / 100) * 20; ctx.arc(0, 0, pulse, 0, Math.PI * 2); ctx.stroke();
+       ctx.fillStyle = 'rgba(74, 222, 128, 0.05)'; ctx.fill();
     }
-    
-    ctx.restore(); // Restore from Ship Space
+    ctx.restore();
 
-    // Draw Laser (Lightning Effect)
+    // Laser
     if (laserRef.current.active) {
        const { x, y, angle, length } = laserRef.current;
        const endX = x + Math.cos(angle) * length;
        const endY = y + Math.sin(angle) * length;
-       
-       const dist = length;
-       const segments = Math.max(2, Math.floor(dist / 15));
-       
-       ctx.beginPath();
-       ctx.moveTo(x, y);
-
+       const dist = length; const segments = Math.max(2, Math.floor(dist / 15));
+       ctx.beginPath(); ctx.moveTo(x, y);
        for(let i=1; i < segments; i++) {
          const t = i / segments;
-         const lx = x + (endX - x) * t;
-         const ly = y + (endY - y) * t;
-         // Jitter
+         const lx = x + (endX - x) * t; const ly = y + (endY - y) * t;
          const offset = (Math.random() - 0.5) * 12;
-         // Perpendicular vector
-         const px = -Math.sin(angle) * offset;
-         const py = Math.cos(angle) * offset;
-         
+         const px = -Math.sin(angle) * offset; const py = Math.cos(angle) * offset;
          ctx.lineTo(lx + px, ly + py);
        }
        ctx.lineTo(endX, endY);
-       
-       // Inner Core
-       ctx.lineWidth = 2;
-       ctx.strokeStyle = '#ffffff';
-       ctx.stroke();
-       
-       // Outer Glow
-       ctx.lineWidth = 6;
-       ctx.strokeStyle = COLOR_LASER;
-       ctx.shadowColor = COLOR_LASER;
-       ctx.shadowBlur = 15;
-       ctx.globalCompositeOperation = 'screen';
-       ctx.stroke();
-       ctx.globalCompositeOperation = 'source-over';
-       ctx.shadowBlur = 0;
-
-       // Spark at collision point if length < MAX (hitting something)
+       ctx.lineWidth = 2; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+       ctx.lineWidth = 6; ctx.strokeStyle = COLOR_LASER; ctx.shadowColor = COLOR_LASER; ctx.shadowBlur = 15;
+       ctx.globalCompositeOperation = 'screen'; ctx.stroke(); ctx.globalCompositeOperation = 'source-over'; ctx.shadowBlur = 0;
        if (length < LASER_RANGE - 5) {
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.arc(endX, endY, 4 + Math.random() * 4, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(endX, endY, 4 + Math.random() * 4, 0, Math.PI * 2); ctx.fill();
        }
     }
+    ctx.restore();
 
-    ctx.restore(); // End Camera Transform
-
-    // --- DRAW MINIMAP / RADAR ---
-    // Bottom Left
-    const mapSize = 180;
-    const mapPadding = 20;
-    const mapX = mapPadding;
-    const mapY = screenSize.height - mapSize - mapPadding;
-    const mapScale = 0.025; // Shows ~7200 world units width
-
+    // Minimap
+    const mapSize = 180; const mapPadding = 20; const mapX = mapPadding; const mapY = screenSize.height - mapSize - mapPadding; const mapScale = 0.025;
     ctx.save();
-    
-    // Map Background
-    ctx.translate(mapX, mapY);
-    ctx.fillStyle = 'rgba(0, 20, 0, 0.8)';
-    ctx.strokeStyle = '#4ade80';
-    ctx.lineWidth = 2;
-    ctx.fillRect(0, 0, mapSize, mapSize);
-    ctx.strokeRect(0, 0, mapSize, mapSize);
+    ctx.translate(mapX, mapY); ctx.fillStyle = 'rgba(0, 20, 0, 0.8)'; ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 2;
+    ctx.fillRect(0, 0, mapSize, mapSize); ctx.strokeRect(0, 0, mapSize, mapSize);
+    ctx.beginPath(); ctx.rect(0, 0, mapSize, mapSize); ctx.clip();
+    const mapCX = mapSize / 2; const mapCY = mapSize / 2;
+    ctx.fillStyle = COLOR_STATION; ctx.beginPath(); ctx.arc(mapCX, mapCY, 4, 0, Math.PI * 2); ctx.fill();
+    const shipMapX = mapCX + ship.x * mapScale; const shipMapY = mapCY + ship.y * mapScale;
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(shipMapX, shipMapY, 3, 0, Math.PI * 2); ctx.fill();
 
-    // Clip to map area
-    ctx.beginPath();
-    ctx.rect(0, 0, mapSize, mapSize);
-    ctx.clip();
-
-    // Map Center (Relative to 0,0 in world)
-    // We want the map to be fixed centered on 0,0 (Station) to show the "Sector"
-    const centerX = mapSize / 2;
-    const centerY = mapSize / 2;
-
-    // Draw Station (Fixed at 0,0)
-    ctx.fillStyle = COLOR_STATION;
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Draw Ship
-    const shipMapX = centerX + ship.x * mapScale;
-    const shipMapY = centerY + ship.y * mapScale;
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(shipMapX, shipMapY, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Draw Asteroids
     asteroidsRef.current.forEach(ast => {
-      const astX = centerX + ast.x * mapScale;
-      const astY = centerY + ast.y * mapScale;
-      
-      // Optimization: Only draw if within map bounds
+      const astX = mapCX + ast.x * mapScale; const astY = mapCY + ast.y * mapScale;
       if (astX > 0 && astX < mapSize && astY > 0 && astY < mapSize) {
-        ctx.fillStyle = ast.tier === AsteroidTier.TITAN ? COLOR_TITAN : (ast.tier === AsteroidTier.CHUNK ? COLOR_CHUNK : COLOR_ORE);
+        if (ast.tier === AsteroidTier.TITAN) ctx.fillStyle = COLOR_TITAN;
+        else if (ast.tier === AsteroidTier.VOLATILE) ctx.fillStyle = COLOR_VOLATILE;
+        else if (ast.tier === AsteroidTier.CHUNK) ctx.fillStyle = COLOR_CHUNK;
+        else ctx.fillStyle = COLOR_ORE;
+        
+        // Blink volatiles
+        if (ast.tier === AsteroidTier.VOLATILE && Math.floor(Date.now()/200)%2===0) {
+            ctx.fillStyle = '#fff';
+        }
+
         const r = Math.max(1, ast.radius * mapScale);
-        ctx.beginPath();
-        ctx.arc(astX, astY, r, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(astX, astY, r, 0, Math.PI * 2); ctx.fill();
       }
     });
 
-    // Draw Mines
     minesRef.current.forEach(m => {
-       const mx = centerX + m.x * mapScale;
-       const my = centerY + m.y * mapScale;
-       ctx.fillStyle = COLOR_DANGER;
-       ctx.beginPath();
-       ctx.arc(mx, my, 2, 0, Math.PI * 2);
-       ctx.fill();
-       // Blast radius ring
-       ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
-       ctx.lineWidth = 1;
-       ctx.beginPath();
-       ctx.arc(mx, my, MINE_BLAST_RADIUS * mapScale, 0, Math.PI * 2);
-       ctx.stroke();
+       const mx = mapCX + m.x * mapScale; const my = mapCY + m.y * mapScale;
+       ctx.fillStyle = COLOR_DANGER; ctx.beginPath(); ctx.arc(mx, my, 2, 0, Math.PI * 2); ctx.fill();
+       ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(mx, my, MINE_BLAST_RADIUS * mapScale, 0, Math.PI * 2); ctx.stroke();
     });
-
-    // Label
-    ctx.fillStyle = 'rgba(74, 222, 128, 0.5)';
-    ctx.font = '10px monospace';
-    ctx.fillText('SECTOR RADAR', 5, 12);
-
+    ctx.fillStyle = 'rgba(74, 222, 128, 0.5)'; ctx.font = '10px monospace'; ctx.fillText('SECTOR RADAR', 5, 12);
     ctx.restore();
 
-
-  }, [gameState, screenSize]);
+  }, [gameState, screenSize, shipRef]); // Reduced dependencies to fix strict mode flicker? Added basic ones.
 
   // --- Main Loop Effect ---
   
@@ -1075,18 +859,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       keysPressed.current.add(e.key.toLowerCase());
-      
       if (e.code === 'Space' && gameState === GameState.PLAYING) {
         if (shipRef.current.ammo > 0) {
-          // Drop Mine
           shipRef.current.ammo--;
           minesRef.current.push({
              id: Math.random().toString(),
-             x: shipRef.current.x,
-             y: shipRef.current.y,
-             vx: 0, vy: 0, radius: 10, angle: 0, color: COLOR_DANGER,
-             timer: 180, // ~3 seconds at 60fps
-             state: 'ARMED'
+             x: shipRef.current.x, y: shipRef.current.y, vx: 0, vy: 0, radius: 10, angle: 0, color: COLOR_DANGER,
+             timer: 180, state: 'ARMED'
           });
           audio.playMineArmed();
           syncUI();
@@ -1095,27 +874,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
         }
       }
     };
-    
-    const handleKeyUp = (e: KeyboardEvent) => {
-      keysPressed.current.delete(e.key.toLowerCase());
-    };
-    
-    const handleMouseMove = (e: MouseEvent) => {
-      mouseRef.current.x = e.clientX;
-      mouseRef.current.y = e.clientY;
-    };
-    const handleMouseDown = (e: MouseEvent) => { 
-      if (e.button === 0) mouseRef.current.down = true; 
-      if (e.button === 2) mouseRef.current.rightDown = true;
-    };
-    const handleMouseUp = (e: MouseEvent) => { 
-      if (e.button === 0) mouseRef.current.down = false; 
-      if (e.button === 2) mouseRef.current.rightDown = false;
-    };
-    const handleContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
-    };
-    
+    const handleKeyUp = (e: KeyboardEvent) => { keysPressed.current.delete(e.key.toLowerCase()); };
+    const handleMouseMove = (e: MouseEvent) => { mouseRef.current.x = e.clientX; mouseRef.current.y = e.clientY; };
+    const handleMouseDown = (e: MouseEvent) => { if (e.button === 0) mouseRef.current.down = true; if (e.button === 2) mouseRef.current.rightDown = true; };
+    const handleMouseUp = (e: MouseEvent) => { if (e.button === 0) mouseRef.current.down = false; if (e.button === 2) mouseRef.current.rightDown = false; };
+    const handleContextMenu = (e: MouseEvent) => { e.preventDefault(); };
     const handleWheel = (e: WheelEvent) => {
       if (gameState === GameState.PLAYING) {
         const delta = Math.sign(e.deltaY) * -0.1;
@@ -1143,18 +906,19 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     };
   }, [gameState, syncUI, shipRef]);
 
-  // Initial Spawn Logic
+  // Spawn / Reset Logic
   useEffect(() => {
-    if (gameState === GameState.PLAYING) {
-      if (prevGameState.current === GameState.MENU || prevGameState.current === GameState.GAME_OVER) {
-         initGame();
-      } 
-      else if (asteroidsRef.current.length === 0) {
+    // Re-init on Game Start (from Menu)
+    if (gameState === GameState.PLAYING && prevGameState.current !== GameState.PLAYING) {
         initGame();
-      }
+    }
+    // Re-init on Sector Change
+    if (gameState === GameState.PLAYING && sector !== prevSector.current) {
+        initGame();
+        prevSector.current = sector;
     }
     prevGameState.current = gameState;
-  }, [gameState, initGame]);
+  }, [gameState, sector, initGame]);
 
   return <canvas ref={canvasRef} width={screenSize.width} height={screenSize.height} className="block cursor-crosshair" />;
 };

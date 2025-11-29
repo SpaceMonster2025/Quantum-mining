@@ -7,6 +7,7 @@ interface UIOverlayProps {
   gameState: GameState;
   ship: Ship;
   upgrades: Upgrades;
+  sector: number;
   onUpgrade: (type: keyof Upgrades) => void;
   onRepair: () => void;
   onBuyAmmo: () => void;
@@ -16,7 +17,7 @@ interface UIOverlayProps {
 }
 
 const UIOverlay: React.FC<UIOverlayProps> = ({ 
-  gameState, ship, upgrades, onUpgrade, onRepair, onBuyAmmo, onSellOre, onUndock, onStartGame 
+  gameState, ship, upgrades, sector, onUpgrade, onRepair, onBuyAmmo, onSellOre, onUndock, onStartGame 
 }) => {
   
   const getCost = (level: number) => Math.floor(UPGRADE_COST_BASE * Math.pow(UPGRADE_COST_MULTIPLIER, level - 1));
@@ -34,16 +35,24 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
         {/* Top Bar */}
         <div className="flex justify-between items-start">
           <div className="space-y-2">
-            {/* Hull */}
-            <div className="w-64 bg-slate-800 border border-slate-600 h-6 relative">
-              <div 
-                className={`h-full ${ship.hull < 30 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} 
-                style={{ width: `${(ship.hull / ship.maxHull) * 100}%` }}
-              />
-              <span className="absolute inset-0 flex items-center justify-center text-xs font-bold drop-shadow-md">
-                HULL: {Math.floor(ship.hull)}/{ship.maxHull}
-              </span>
+            <div className="flex items-center gap-4">
+                {/* Hull */}
+                <div className="w-64 bg-slate-800 border border-slate-600 h-6 relative">
+                  <div 
+                    className={`h-full ${ship.hull < 30 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} 
+                    style={{ width: `${(ship.hull / ship.maxHull) * 100}%` }}
+                  />
+                  <span className="absolute inset-0 flex items-center justify-center text-xs font-bold drop-shadow-md">
+                    HULL: {Math.floor(ship.hull)}/{ship.maxHull}
+                  </span>
+                </div>
+                
+                {/* SECTOR INDICATOR */}
+                <div className="bg-slate-900 border border-purple-500 px-4 py-1">
+                   <span className="text-purple-400 font-bold font-mono">SECTOR {sector}</span>
+                </div>
             </div>
+            
             {/* Shield */}
             {ship.maxShield > 0 && (
               <div className="w-64 bg-slate-800 border border-blue-900 h-4 relative">
@@ -101,7 +110,10 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
           
           {/* Header */}
           <div className="col-span-2 flex justify-between items-center border-b border-slate-700 pb-4">
-             <h1 className="text-3xl font-bold text-yellow-500">STATION SERVICES</h1>
+             <div className="flex items-baseline gap-4">
+                 <h1 className="text-3xl font-bold text-yellow-500">STATION SERVICES</h1>
+                 <span className="text-slate-400">SECTOR {sector}</span>
+             </div>
              <div className="text-2xl text-green-400 font-mono">CREDITS: {ship.credits}</div>
           </div>
 
@@ -194,6 +206,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
          {gameState === GameState.GAME_OVER && (
            <div className="text-red-500 text-2xl font-mono border border-red-500 p-4">
              CRITICAL HULL FAILURE. SIGNAL LOST.
+             <div className="text-sm mt-2 text-white">REACHED SECTOR {sector}</div>
            </div>
          )}
 

@@ -25,6 +25,7 @@ export const SHIP_RADIUS = 15;
 export const TITAN_RADIUS = 60;
 export const CHUNK_RADIUS = 25;
 export const ORE_RADIUS = 5;
+export const VOLATILE_RADIUS = 50;
 
 // Colors
 export const COLOR_BG = '#050505';
@@ -33,6 +34,7 @@ export const COLOR_THRUST = '#00ffff';
 export const COLOR_LASER = '#ff00ff';
 export const COLOR_ORE = '#4ade80'; // Neon Green
 export const COLOR_TITAN = '#94a3b8'; // Slate 400
+export const COLOR_VOLATILE = '#f97316'; // Orange 500
 export const COLOR_CHUNK = '#64748b'; // Slate 500
 export const COLOR_DANGER = '#ef4444'; // Red
 export const COLOR_SHIELD = '#3b82f6'; // Blue

@@ -31,9 +31,10 @@ export interface Particle extends Entity {
 }
 
 export enum AsteroidTier {
-  TITAN = 1,  // Massive, needs bomb
-  CHUNK = 2,  // Mineable with laser
-  ORE = 3     // Loot
+  TITAN = 1,    // Massive, needs bomb
+  CHUNK = 2,    // Mineable with laser
+  ORE = 3,      // Loot
+  VOLATILE = 4  // Explosive, dangerous
 }
 
 export interface Asteroid extends Entity {
