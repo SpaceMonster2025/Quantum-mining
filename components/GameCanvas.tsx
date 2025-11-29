@@ -177,8 +177,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       audio.setThrust(true);
       // Thruster particles
       spawnParticles(
-        ship.x - Math.cos(ship.angle) * 15, 
-        ship.y - Math.sin(ship.angle) * 15, 
+        ship.x - Math.cos(ship.angle) * 20, // Moved back slightly for new ship model
+        ship.y - Math.sin(ship.angle) * 20, 
         COLOR_THRUST, 1, 1, 15
       );
     } else {
@@ -794,21 +794,105 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       ctx.shadowColor = COLOR_SHIELD;
       ctx.shadowBlur = 10;
       ctx.beginPath();
-      ctx.arc(0, 0, SHIP_RADIUS + 5, 0, Math.PI * 2);
+      ctx.arc(0, 0, SHIP_RADIUS + 8, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.shadowBlur = 0;
     }
 
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = COLOR_SHIP;
-    ctx.strokeStyle = COLOR_SHIP;
+    // -- NEW SHIP MODEL --
+    
+    // 1. Engine Cone (Back)
+    ctx.fillStyle = '#1e293b'; // Dark Slate
+    ctx.strokeStyle = '#64748b'; // Slate Border
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(15, 0); 
-    ctx.lineTo(-10, 10);
-    ctx.lineTo(-5, 0);
-    ctx.lineTo(-10, -10);
+    ctx.moveTo(-8, -5);
+    ctx.lineTo(-16, 0);
+    ctx.lineTo(-8, 5);
     ctx.closePath();
+    ctx.fill();
     ctx.stroke();
+
+    // Engine Glow if thrusting
+    if (ship.thrusting) {
+        ctx.fillStyle = '#06b6d4'; // Cyan core
+        ctx.shadowColor = '#06b6d4';
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.moveTo(-14, -3);
+        ctx.lineTo(-24 - Math.random()*5, 0); // Flicker length
+        ctx.lineTo(-14, 3);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+
+    // 2. Cargo Pods (Sides)
+    ctx.fillStyle = '#334155'; // Slate 700
+    ctx.beginPath();
+    // Top Pod
+    ctx.rect(-6, -12, 12, 4);
+    // Bottom Pod
+    ctx.rect(-6, 8, 12, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    // 3. Main Hull (Center Box)
+    ctx.fillStyle = '#475569'; // Slate 600
+    ctx.beginPath();
+    ctx.rect(-8, -8, 16, 16);
+    ctx.fill();
+    ctx.stroke();
+    
+    // Hull Details (Lines)
+    ctx.strokeStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.moveTo(0, -8); ctx.lineTo(0, 8); // Center line
+    ctx.moveTo(-8, 0); ctx.lineTo(8, 0); // Cross line
+    ctx.stroke();
+    ctx.strokeStyle = '#64748b'; // Restore border color
+
+    // 4. Forward Arms (Pincers)
+    ctx.fillStyle = '#64748b'; // Slate 500
+    ctx.beginPath();
+    // Top Arm
+    ctx.moveTo(8, -7);
+    ctx.lineTo(18, -7);
+    ctx.lineTo(18, -3);
+    ctx.lineTo(8, -3);
+    // Bottom Arm
+    ctx.moveTo(8, 7);
+    ctx.lineTo(18, 7);
+    ctx.lineTo(18, 3);
+    ctx.lineTo(8, 3);
+    ctx.fill();
+    ctx.stroke();
+
+    // 5. Cockpit / Window
+    ctx.fillStyle = '#0ea5e9'; // Sky Blue
+    ctx.shadowColor = '#0ea5e9';
+    ctx.shadowBlur = 5;
+    ctx.beginPath();
+    ctx.rect(2, -3, 4, 6);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // 6. Glowing Yellow Lights
+    ctx.fillStyle = '#facc15'; // Yellow
+    ctx.shadowColor = '#facc15';
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    // Arm tips
+    ctx.arc(16, -5, 1, 0, Math.PI*2);
+    ctx.arc(16, 5, 1, 0, Math.PI*2);
+    // Cargo Pod Lights
+    ctx.rect(-4, -11, 2, 2);
+    ctx.rect(2, -11, 2, 2);
+    ctx.rect(-4, 9, 2, 2);
+    ctx.rect(2, 9, 2, 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // -- END NEW SHIP MODEL --
     
     // Draw Tractor Beam Effect
     if (mouseRef.current.rightDown) {
