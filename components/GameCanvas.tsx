@@ -33,7 +33,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
   const cameraRef = useRef({ x: 0, y: 0, zoom: 0.8 }); // Initialize with slight zoom out
   const shakeRef = useRef<number>(0); // Screen shake magnitude
   const keysPressed = useRef<Set<string>>(new Set());
-  const mouseRef = useRef({ x: 0, y: 0, down: false });
+  const mouseRef = useRef({ x: 0, y: 0, down: false, rightDown: false });
+  
+  // Laser State for separation of logic/render
+  const laserRef = useRef({ active: false, x: 0, y: 0, length: 0, angle: 0 });
 
   // --- Initialization ---
 
@@ -74,7 +77,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       }
     } else if (ast.tier === AsteroidTier.CHUNK) {
       // Chunk -> Ore
-      const oreCount = 5; // Break into 5 collected particles
+      const oreCount = 25; // 5x Loot: Increased from 5 to 25
       for (let i = 0; i < oreCount; i++) {
         const angle = randomRange(0, Math.PI * 2);
         const speed = randomRange(2, 5);
@@ -201,7 +204,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     cameraRef.current.x = ship.x - (screenSize.width / 2) / zoom;
     cameraRef.current.y = ship.y - (screenSize.height / 2) / zoom;
 
-    // 3. Mining Laser
+    // 3. Mining Laser Logic
+    laserRef.current.active = false;
     if (mouseRef.current.down) {
       const centerX = screenSize.width / 2;
       const centerY = screenSize.height / 2;
@@ -209,36 +213,88 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       const dy = mouseRef.current.y - centerY;
       const aimAngle = Math.atan2(dy, dx);
       
-      let hit = false;
+      // Default to max range
+      laserRef.current = {
+          active: true,
+          x: ship.x,
+          y: ship.y,
+          angle: aimAngle,
+          length: LASER_RANGE
+      };
+      
+      let closestAst: Asteroid | null = null;
+      let closestDist = LASER_RANGE; // Start with max range
       const laserPower = 1 + (upgrades.laserLevel * 0.5);
 
       asteroidsRef.current.forEach(ast => {
-        if (hit) return;
-        if (ast.tier === AsteroidTier.TITAN) return;
+        // Ignore Titans (needs bombs) and Ore (indestructible/loot)
+        if (ast.tier === AsteroidTier.TITAN || ast.tier === AsteroidTier.ORE) return;
 
         const dToAst = distance({x: ship.x, y: ship.y}, ast);
-        if (dToAst < LASER_RANGE) {
+        
+        // Broad check first (range + radius)
+        if (dToAst < LASER_RANGE + ast.radius) {
           const angleToAst = Math.atan2(ast.y - ship.y, ast.x - ship.x);
           let angleDiff = angleToAst - aimAngle;
           while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
           while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
 
+          // Cone check (approx 22 degrees total width)
           if (Math.abs(angleDiff) < 0.2) {
-             hit = true;
-             const wasAlive = ast.hp > 0;
-             ast.hp -= laserPower;
-             spawnParticles(ast.x, ast.y, COLOR_ORE, 2, 2, 10);
-             
-             if (wasAlive && ast.hp <= 0) {
-               breakAsteroid(ast, 0, 0); // No extra momentum from laser
+             // We want the CLOSEST asteroid
+             if (dToAst < closestDist) {
+                 closestDist = dToAst;
+                 closestAst = ast;
              }
           }
         }
       });
+
+      if (closestAst) {
+         const ast = closestAst as Asteroid;
+         const wasAlive = ast.hp > 0;
+         ast.hp -= laserPower;
+         
+         // Visuals: Stop laser at surface (approximate with radius)
+         const impactDist = Math.max(0, closestDist - ast.radius);
+         laserRef.current.length = impactDist;
+         
+         const impactX = ship.x + Math.cos(aimAngle) * impactDist;
+         const impactY = ship.y + Math.sin(aimAngle) * impactDist;
+
+         spawnParticles(impactX, impactY, COLOR_ORE, 2, 2, 10);
+         
+         if (wasAlive && ast.hp <= 0) {
+           breakAsteroid(ast, 0, 0); 
+         }
+      }
+
       asteroidsRef.current = asteroidsRef.current.filter(a => a.hp > 0);
     }
 
-    // 4. Mines
+    // 4. Tractor Beam (Right Mouse)
+    if (mouseRef.current.rightDown) {
+      const TRACTOR_RANGE = 500;
+      const TRACTOR_FORCE = 0.5;
+
+      asteroidsRef.current.forEach(ast => {
+        if (ast.tier === AsteroidTier.ORE) {
+          const dist = distance(ship, ast);
+          if (dist < TRACTOR_RANGE) {
+            const angle = Math.atan2(ship.y - ast.y, ship.x - ast.x);
+            // Apply suction force
+            ast.vx += Math.cos(angle) * TRACTOR_FORCE;
+            ast.vy += Math.sin(angle) * TRACTOR_FORCE;
+            
+            // Subtle random wiggle to make it look like a magnetic field
+            ast.vx += randomRange(-0.2, 0.2);
+            ast.vy += randomRange(-0.2, 0.2);
+          }
+        }
+      });
+    }
+
+    // 5. Mines
     minesRef.current.forEach(mine => {
       mine.timer--;
       
@@ -326,7 +382,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
             const wasAlive = ast.hp > 0;
             if (ast.tier === AsteroidTier.TITAN) {
                ast.hp = 0;
-            } else {
+            } else if (ast.tier !== AsteroidTier.ORE) { // Ore is indestructible to blasts
                ast.hp -= 100;
             }
 
@@ -361,7 +417,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     asteroidsRef.current = asteroidsRef.current.filter(a => a.hp > 0);
 
 
-    // 5. Asteroid Physics & Collision
+    // 6. Asteroid Physics & Collision
     asteroidsRef.current.forEach(ast => {
       ast.x += ast.vx;
       ast.y += ast.vy;
@@ -398,13 +454,13 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       }
     });
 
-    // 6. Station Docking
+    // 7. Station Docking
     const distToStation = distance({x:0, y:0}, ship);
     if (distToStation < STATION_RADIUS + SHIP_RADIUS && Math.abs(ship.vx) < 1 && Math.abs(ship.vy) < 1) {
        setGameState(GameState.DOCKED);
     }
 
-    // 7. Particles
+    // 8. Particles
     particlesRef.current.forEach(p => {
       p.x += p.vx;
       p.y += p.vy;
@@ -412,10 +468,10 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     });
     particlesRef.current = particlesRef.current.filter(p => p.life > 0);
 
-    // 8. Timers
+    // 9. Timers
     if (ship.invulnerableTimer > 0) ship.invulnerableTimer--;
 
-    // 9. Game Over Check
+    // 10. Game Over Check
     if (ship.hull <= 0) {
       setGameState(GameState.GAME_OVER);
     }
@@ -607,30 +663,71 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     ctx.closePath();
     ctx.stroke();
     
-    // Laser Beam
-    if (mouseRef.current.down) {
-       ctx.restore(); 
-       const cx = screenSize.width / 2;
-       const cy = screenSize.height / 2;
-       const dx = mouseRef.current.x - cx;
-       const dy = mouseRef.current.y - cy;
-       const aimAngle = Math.atan2(dy, dx);
+    // Draw Tractor Beam Effect
+    if (mouseRef.current.rightDown) {
+       ctx.strokeStyle = 'rgba(74, 222, 128, 0.2)'; // Green tint
+       ctx.lineWidth = 1;
+       ctx.beginPath();
+       const pulse = 500 + Math.sin(Date.now() / 100) * 20;
+       ctx.arc(0, 0, pulse, 0, Math.PI * 2);
+       ctx.stroke();
        
-       ctx.save();
-       ctx.translate(ship.x, ship.y);
+       ctx.fillStyle = 'rgba(74, 222, 128, 0.05)';
+       ctx.fill();
+    }
+    
+    ctx.restore(); // Restore from Ship Space
+
+    // Draw Laser (Lightning Effect)
+    if (laserRef.current.active) {
+       const { x, y, angle, length } = laserRef.current;
+       const endX = x + Math.cos(angle) * length;
+       const endY = y + Math.sin(angle) * length;
        
+       const dist = length;
+       const segments = Math.max(2, Math.floor(dist / 15));
+       
+       ctx.beginPath();
+       ctx.moveTo(x, y);
+
+       for(let i=1; i < segments; i++) {
+         const t = i / segments;
+         const lx = x + (endX - x) * t;
+         const ly = y + (endY - y) * t;
+         // Jitter
+         const offset = (Math.random() - 0.5) * 12;
+         // Perpendicular vector
+         const px = -Math.sin(angle) * offset;
+         const py = Math.cos(angle) * offset;
+         
+         ctx.lineTo(lx + px, ly + py);
+       }
+       ctx.lineTo(endX, endY);
+       
+       // Inner Core
+       ctx.lineWidth = 2;
+       ctx.strokeStyle = '#ffffff';
+       ctx.stroke();
+       
+       // Outer Glow
+       ctx.lineWidth = 6;
        ctx.strokeStyle = COLOR_LASER;
        ctx.shadowColor = COLOR_LASER;
        ctx.shadowBlur = 15;
-       ctx.lineWidth = 2 + Math.random() * 2;
-       
-       ctx.beginPath();
-       ctx.moveTo(0, 0);
-       ctx.lineTo(Math.cos(aimAngle) * LASER_RANGE, Math.sin(aimAngle) * LASER_RANGE);
+       ctx.globalCompositeOperation = 'screen';
        ctx.stroke();
+       ctx.globalCompositeOperation = 'source-over';
+       ctx.shadowBlur = 0;
+
+       // Spark at collision point if length < MAX (hitting something)
+       if (length < LASER_RANGE - 5) {
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(endX, endY, 4 + Math.random() * 4, 0, Math.PI * 2);
+          ctx.fill();
+       }
     }
 
-    ctx.restore();
     ctx.restore(); // End Camera Transform
 
     // --- DRAW MINIMAP / RADAR ---
@@ -773,8 +870,17 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       mouseRef.current.x = e.clientX;
       mouseRef.current.y = e.clientY;
     };
-    const handleMouseDown = () => { mouseRef.current.down = true; };
-    const handleMouseUp = () => { mouseRef.current.down = false; };
+    const handleMouseDown = (e: MouseEvent) => { 
+      if (e.button === 0) mouseRef.current.down = true; 
+      if (e.button === 2) mouseRef.current.rightDown = true;
+    };
+    const handleMouseUp = (e: MouseEvent) => { 
+      if (e.button === 0) mouseRef.current.down = false; 
+      if (e.button === 2) mouseRef.current.rightDown = false;
+    };
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
     
     const handleWheel = (e: WheelEvent) => {
       if (gameState === GameState.PLAYING) {
@@ -789,6 +895,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('contextmenu', handleContextMenu);
     window.addEventListener('wheel', handleWheel);
 
     return () => {
@@ -797,6 +904,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({ gameState, setGameState, shipRe
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('contextmenu', handleContextMenu);
       window.removeEventListener('wheel', handleWheel);
     };
   }, [gameState, syncUI, shipRef]);
