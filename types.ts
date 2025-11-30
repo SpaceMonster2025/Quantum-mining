@@ -2,7 +2,8 @@ export enum GameState {
   MENU = 'MENU',
   PLAYING = 'PLAYING',
   DOCKED = 'DOCKED',
-  GAME_OVER = 'GAME_OVER'
+  GAME_OVER = 'GAME_OVER',
+  SECTOR_CLEARED = 'SECTOR_CLEARED'
 }
 
 export interface Point {

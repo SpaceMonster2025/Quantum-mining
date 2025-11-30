@@ -10,6 +10,7 @@ import { audio } from './utils/audio';
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>(GameState.MENU);
   const [sector, setSector] = useState(1);
+  const [sectorStats, setSectorStats] = useState({ percent: 0, ore: 0 });
   
   // Game State Refs (Single source of truth passed to canvas)
   const shipRef = useRef<Ship>({
@@ -55,9 +56,15 @@ const App: React.FC = () => {
     setGameState(GameState.PLAYING);
   };
 
-  const handleSectorComplete = () => {
-    setSector(s => s + 1);
+  const handleSectorCleared = (stats: { percent: number; ore: number }) => {
+    setSectorStats(stats);
+    setGameState(GameState.SECTOR_CLEARED);
     audio.playUI('buy'); // Positive sound for progress
+  };
+
+  const handleNextSector = () => {
+    setSector(s => s + 1);
+    setGameState(GameState.PLAYING);
   };
 
   const handleUndock = () => {
@@ -136,19 +143,21 @@ const App: React.FC = () => {
         upgradesRef={upgradesRef}
         syncUI={syncUI}
         sector={sector}
-        onSectorComplete={handleSectorComplete}
+        onSectorCleared={handleSectorCleared}
       />
       <UIOverlay 
         gameState={gameState}
         ship={shipRef.current}
         upgrades={upgradesRef.current}
         sector={sector}
+        sectorStats={sectorStats}
         onStartGame={handleStartGame}
         onUndock={handleUndock}
         onSellOre={handleSellOre}
         onBuyAmmo={handleBuyAmmo}
         onRepair={handleRepair}
         onUpgrade={handleUpgrade}
+        onNextSector={handleNextSector}
       />
     </div>
   );

@@ -5,7 +5,8 @@ import {
   MAX_SPEED, LASER_RANGE, SHIP_RADIUS, MINE_PUCKER_DURATION, MINE_BLAST_RADIUS,
   COLOR_ORE, COLOR_TITAN, COLOR_CHUNK, COLOR_DANGER, COLOR_SHIP, COLOR_THRUST,
   STATION_RADIUS, COLOR_STATION, COLOR_SHIELD, MINE_PUCKER_FORCE, MINE_BLAST_FORCE,
-  TITAN_RADIUS, CHUNK_RADIUS, ORE_RADIUS, VOLATILE_RADIUS, COLOR_VOLATILE, COLOR_LASER
+  TITAN_RADIUS, CHUNK_RADIUS, ORE_RADIUS, VOLATILE_RADIUS, COLOR_VOLATILE, COLOR_LASER,
+  STATION_SHIELD_RADIUS
 } from '../constants';
 import { distance, randomRange, checkCollision, generatePolygonOffsets } from '../utils/physics';
 import { audio } from '../utils/audio';
@@ -17,11 +18,11 @@ interface GameCanvasProps {
   upgradesRef: React.MutableRefObject<Upgrades>;
   syncUI: () => void;
   sector: number;
-  onSectorComplete: () => void;
+  onSectorCleared: (stats: { percent: number; ore: number }) => void;
 }
 
 const GameCanvas: React.FC<GameCanvasProps> = ({ 
-  gameState, setGameState, shipRef, upgradesRef, syncUI, sector, onSectorComplete 
+  gameState, setGameState, shipRef, upgradesRef, syncUI, sector, onSectorCleared 
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
@@ -40,6 +41,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   const keysPressed = useRef<Set<string>>(new Set());
   const mouseRef = useRef({ x: 0, y: 0, down: false, rightDown: false });
   const levelInitialAsteroids = useRef<number>(0);
+  const sectorOreCollected = useRef<number>(0);
   
   // Laser State for separation of logic/render
   const laserRef = useRef({ active: false, x: 0, y: 0, length: 0, angle: 0 });
@@ -151,16 +153,25 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     particlesRef.current = [];
     cameraRef.current.zoom = 0.8;
     shakeRef.current = 0;
+    sectorOreCollected.current = 0;
 
     // Difficulty Scaling based on Sector
-    const baseCount = 20;
-    const additionalCount = Math.floor(sector * 1.5);
-    const volatileCount = Math.floor((sector - 1) * 2); // Sector 1: 0, Sector 2: 2, etc.
-    const titanCount = Math.max(5, baseCount + additionalCount - volatileCount);
+    let volatileCount = 0;
+    let titanCount = 0;
+
+    if (sector === 1) {
+        // Sector 1: Exactly 4 Titans, no volatiles
+        titanCount = 4;
+        volatileCount = 0;
+    } else {
+        // Scaling: Start with 4, add random amount per sector level
+        // e.g. Sector 2 gets 4 + random(2, 5) extra.
+        const extraPerLevel = (sector - 1) * randomRange(2, 5); 
+        titanCount = Math.floor(4 + extraPerLevel);
+        volatileCount = Math.floor((sector - 1) * 2); // 0, 2, 4...
+    }
     
     // Total trackable targets (Volatile + Titan)
-    // Ore and Chunks don't count towards sector completion logic usually, 
-    // but the prompt says "depleted". Let's track big rocks.
     levelInitialAsteroids.current = volatileCount + titanCount;
 
     // Spawn Volatiles
@@ -474,10 +485,36 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     minesRef.current = minesRef.current.filter(m => m.state !== 'DETONATING');
     asteroidsRef.current = asteroidsRef.current.filter(a => a.hp > 0);
 
-    // 6. Asteroid Physics & Collision
+    // 6. Asteroid Physics & Collision & Shield Logic
     let titansLeft = 0;
 
     asteroidsRef.current.forEach(ast => {
+      // Station Shield Collision
+      const distToStation = distance({x:0, y:0}, ast);
+      const shieldDist = STATION_SHIELD_RADIUS + ast.radius;
+      
+      if (distToStation < shieldDist) {
+        // Bounce off shield
+        const angle = Math.atan2(ast.y, ast.x);
+        const overlap = shieldDist - distToStation;
+        
+        // Move out
+        ast.x += Math.cos(angle) * overlap;
+        ast.y += Math.sin(angle) * overlap;
+        
+        // Reflect velocity
+        const nx = Math.cos(angle);
+        const ny = Math.sin(angle);
+        const dot = ast.vx * nx + ast.vy * ny;
+        
+        if (dot < 0) {
+            ast.vx = (ast.vx - 2 * dot * nx) * 0.5; // Dampen bounce
+            ast.vy = (ast.vy - 2 * dot * ny) * 0.5;
+            // Shield hit particles
+            spawnParticles(ast.x - nx * ast.radius, ast.y - ny * ast.radius, '#60a5fa', 3, 1, 10);
+        }
+      }
+
       ast.x += ast.vx;
       ast.y += ast.vy;
       ast.angle += ast.rotationSpeed;
@@ -492,6 +529,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         if (ast.tier === AsteroidTier.ORE) {
           if (ship.cargo < ship.maxCargo) {
             ship.cargo++;
+            sectorOreCollected.current++; // Track for report
             ast.hp = 0;
             audio.playPickup();
             syncUI();
@@ -525,10 +563,11 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     // 6b. Sector Completion Check
     // If < 10% of initial big asteroids remain
     if (levelInitialAsteroids.current > 0 && titansLeft <= levelInitialAsteroids.current * 0.1) {
-        // Only trigger once per level
-        if (sector === prevSector.current) {
-            onSectorComplete();
-            // prevSector will be updated in the effect loop next cycle
+        // Only trigger once per level. Check against gameState ensures we don't trigger repeatedly while waiting in the menu
+        if (sector === prevSector.current && gameState === GameState.PLAYING) {
+             const destroyed = levelInitialAsteroids.current - titansLeft;
+             const percent = Math.floor((destroyed / levelInitialAsteroids.current) * 100);
+             onSectorCleared({ percent, ore: sectorOreCollected.current });
         }
     }
 
@@ -553,7 +592,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       audio.playExplosion('large');
     }
 
-  }, [gameState, setGameState, syncUI, shipRef, upgradesRef, screenSize, sector, onSectorComplete]);
+  }, [gameState, setGameState, syncUI, shipRef, upgradesRef, screenSize, sector, onSectorCleared]);
 
   // --- Render Loop ---
   const draw = useCallback(() => {
@@ -601,6 +640,25 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     const time = Date.now();
     const slowRot = time * 0.0002;
     const medRot = time * 0.0005;
+
+    // Force Shield
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(0, 0, STATION_SHIELD_RADIUS, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.5)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([20, 10]);
+    ctx.rotate(time * 0.0001);
+    ctx.stroke();
+    // Inner pulse
+    ctx.beginPath();
+    ctx.arc(0, 0, STATION_SHIELD_RADIUS - 10, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([10, 20]);
+    ctx.rotate(-time * 0.0002);
+    ctx.stroke();
+    ctx.restore();
 
     ctx.strokeStyle = 'rgba(250, 204, 21, 0.3)';
     ctx.lineWidth = 1;

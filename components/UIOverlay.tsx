@@ -8,16 +8,18 @@ interface UIOverlayProps {
   ship: Ship;
   upgrades: Upgrades;
   sector: number;
+  sectorStats?: { percent: number; ore: number };
   onUpgrade: (type: keyof Upgrades) => void;
   onRepair: () => void;
   onBuyAmmo: () => void;
   onSellOre: () => void;
   onUndock: () => void;
   onStartGame: () => void;
+  onNextSector: () => void;
 }
 
 const UIOverlay: React.FC<UIOverlayProps> = ({ 
-  gameState, ship, upgrades, sector, onUpgrade, onRepair, onBuyAmmo, onSellOre, onUndock, onStartGame 
+  gameState, ship, upgrades, sector, sectorStats, onUpgrade, onRepair, onBuyAmmo, onSellOre, onUndock, onStartGame, onNextSector
 }) => {
   
   const getCost = (level: number) => Math.floor(UPGRADE_COST_BASE * Math.pow(UPGRADE_COST_MULTIPLIER, level - 1));
@@ -100,6 +102,41 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
         </div>
       </div>
     );
+  }
+
+  // Render Sector Cleared Popup
+  if (gameState === GameState.SECTOR_CLEARED) {
+      return (
+        <div className="absolute inset-0 bg-black/70 flex items-center justify-center pointer-events-auto">
+          <div className="bg-slate-900 border-2 border-green-500 p-8 max-w-lg w-full text-center shadow-[0_0_50px_rgba(74,222,128,0.3)] animate-in fade-in zoom-in duration-300">
+             <h1 className="text-4xl font-bold text-green-400 mb-2">SECTOR SECURED</h1>
+             <div className="w-full h-1 bg-green-500 mb-6"></div>
+             
+             <div className="space-y-6 mb-8 text-left">
+                <div className="flex justify-between items-center text-xl">
+                    <span className="text-slate-400">THREAT ELIMINATION:</span>
+                    <span className="text-white font-mono">{sectorStats?.percent || 100}%</span>
+                </div>
+                <div className="flex justify-between items-center text-xl">
+                    <span className="text-slate-400">RESOURCES HARVESTED:</span>
+                    <span className="text-green-300 font-mono">+{sectorStats?.ore || 0} ORE</span>
+                </div>
+                
+                <div className="bg-slate-800 p-4 rounded text-sm text-slate-300">
+                   <p className="mb-1">ASTEROID DENSITY INCREASING...</p>
+                   <p>PREPARE FOR SECTOR {sector + 1}</p>
+                </div>
+             </div>
+
+             <button 
+               onClick={() => { playClick(); onNextSector(); }}
+               className="w-full py-4 bg-green-600 hover:bg-green-500 text-black font-bold text-xl uppercase tracking-widest transition-colors"
+             >
+               INITIATE WARP JUMP
+             </button>
+          </div>
+        </div>
+      );
   }
 
   // Render Docking Menu

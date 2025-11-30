@@ -9,6 +9,7 @@ export const MAX_SPEED = 8;
 export const LASER_RANGE = 250;
 export const LASER_COOLDOWN = 10;
 export const STATION_RADIUS = 150;
+export const STATION_SHIELD_RADIUS = 220;
 
 // Balance
 export const STARTING_CREDITS = 100;
