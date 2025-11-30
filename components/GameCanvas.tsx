@@ -18,7 +18,7 @@ interface GameCanvasProps {
   upgradesRef: React.MutableRefObject<Upgrades>;
   syncUI: () => void;
   sector: number;
-  onSectorCleared: (stats: { percent: number; ore: number }) => void;
+  onSectorCleared: (stats: { time: number; collected: number; total: number }) => void;
 }
 
 const GameCanvas: React.FC<GameCanvasProps> = ({ 
@@ -42,6 +42,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
   const mouseRef = useRef({ x: 0, y: 0, down: false, rightDown: false });
   const levelInitialAsteroids = useRef<number>(0);
   const sectorOreCollected = useRef<number>(0);
+  const totalOreSpawned = useRef<number>(0);
+  const startTime = useRef<number>(0);
   
   // Laser State for separation of logic/render
   const laserRef = useRef({ active: false, x: 0, y: 0, length: 0, angle: 0 });
@@ -70,6 +72,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         size = CHUNK_RADIUS;
         color = COLOR_CHUNK;
         hp = 50;
+    } else if (tier === AsteroidTier.ORE) {
+        totalOreSpawned.current++;
     }
 
     asteroidsRef.current.push({
@@ -154,6 +158,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     cameraRef.current.zoom = 0.8;
     shakeRef.current = 0;
     sectorOreCollected.current = 0;
+    totalOreSpawned.current = 0;
+    startTime.current = Date.now();
 
     // Difficulty Scaling based on Sector
     let volatileCount = 0;
@@ -165,7 +171,6 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
         volatileCount = 0;
     } else {
         // Scaling: Start with 4, add random amount per sector level
-        // e.g. Sector 2 gets 4 + random(2, 5) extra.
         const extraPerLevel = (sector - 1) * randomRange(2, 5); 
         titanCount = Math.floor(4 + extraPerLevel);
         volatileCount = Math.floor((sector - 1) * 2); // 0, 2, 4...
@@ -486,7 +491,7 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     asteroidsRef.current = asteroidsRef.current.filter(a => a.hp > 0);
 
     // 6. Asteroid Physics & Collision & Shield Logic
-    let titansLeft = 0;
+    let destroyableCount = 0;
 
     asteroidsRef.current.forEach(ast => {
       // Station Shield Collision
@@ -521,8 +526,8 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
       ast.vx *= 0.99;
       ast.vy *= 0.99;
 
-      if (ast.tier === AsteroidTier.TITAN || ast.tier === AsteroidTier.VOLATILE) {
-          titansLeft++;
+      if (ast.tier !== AsteroidTier.ORE) {
+          destroyableCount++;
       }
 
       if (checkCollision(ship, ast)) {
@@ -561,13 +566,20 @@ const GameCanvas: React.FC<GameCanvasProps> = ({
     });
 
     // 6b. Sector Completion Check
-    // If < 10% of initial big asteroids remain
-    if (levelInitialAsteroids.current > 0 && titansLeft <= levelInitialAsteroids.current * 0.1) {
-        // Only trigger once per level. Check against gameState ensures we don't trigger repeatedly while waiting in the menu
+    // Trigger when ALL destroyable asteroids (Chunks/Titans/Volatiles) are gone.
+    // Ensure initial spawn has happened (levelInitialAsteroids > 0)
+    if (levelInitialAsteroids.current > 0 && destroyableCount === 0) {
+        // Only trigger once per level.
         if (sector === prevSector.current && gameState === GameState.PLAYING) {
-             const destroyed = levelInitialAsteroids.current - titansLeft;
-             const percent = Math.floor((destroyed / levelInitialAsteroids.current) * 100);
-             onSectorCleared({ percent, ore: sectorOreCollected.current });
+             const endTime = Date.now();
+             const timeTaken = (endTime - startTime.current) / 1000;
+             const floatingOre = asteroidsRef.current.filter(a => a.tier === AsteroidTier.ORE).length;
+             // We assume floating ore is 'secured' by the end of sector auto-cleanup
+             onSectorCleared({ 
+               time: timeTaken, 
+               collected: sectorOreCollected.current + floatingOre,
+               total: totalOreSpawned.current 
+             });
         }
     }
 

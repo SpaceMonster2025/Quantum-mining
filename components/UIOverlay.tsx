@@ -8,7 +8,7 @@ interface UIOverlayProps {
   ship: Ship;
   upgrades: Upgrades;
   sector: number;
-  sectorStats?: { percent: number; ore: number };
+  sectorStats?: { percent: number; ore: number; time: number; bonus: number };
   onUpgrade: (type: keyof Upgrades) => void;
   onRepair: () => void;
   onBuyAmmo: () => void;
@@ -112,19 +112,23 @@ const UIOverlay: React.FC<UIOverlayProps> = ({
              <h1 className="text-4xl font-bold text-green-400 mb-2">SECTOR SECURED</h1>
              <div className="w-full h-1 bg-green-500 mb-6"></div>
              
-             <div className="space-y-6 mb-8 text-left">
-                <div className="flex justify-between items-center text-xl">
-                    <span className="text-slate-400">THREAT ELIMINATION:</span>
-                    <span className="text-white font-mono">{sectorStats?.percent || 100}%</span>
+             <div className="space-y-6 mb-8 text-left font-mono">
+                <div className="flex justify-between items-center text-lg">
+                    <span className="text-slate-400">MISSION TIME:</span>
+                    <span className="text-white">{sectorStats?.time.toFixed(1) || 0}s</span>
                 </div>
-                <div className="flex justify-between items-center text-xl">
-                    <span className="text-slate-400">RESOURCES HARVESTED:</span>
-                    <span className="text-green-300 font-mono">+{sectorStats?.ore || 0} ORE</span>
+                <div className="flex justify-between items-center text-lg">
+                    <span className="text-slate-400">LOOT EFFICIENCY:</span>
+                    <span className="text-white">{sectorStats?.percent || 0}%</span>
                 </div>
-                
-                <div className="bg-slate-800 p-4 rounded text-sm text-slate-300">
-                   <p className="mb-1">ASTEROID DENSITY INCREASING...</p>
-                   <p>PREPARE FOR SECTOR {sector + 1}</p>
+                <div className="flex justify-between items-center text-lg">
+                    <span className="text-slate-400">ORE SECURED:</span>
+                    <span className="text-green-300">+{sectorStats?.ore || 0} UNITS</span>
+                </div>
+                 <div className="w-full h-px bg-slate-700 my-2"></div>
+                 <div className="flex justify-between items-center text-xl font-bold">
+                    <span className="text-yellow-500">TOTAL PAYOUT:</span>
+                    <span className="text-yellow-400">+{sectorStats?.bonus || 0} CR</span>
                 </div>
              </div>
 

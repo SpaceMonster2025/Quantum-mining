@@ -10,7 +10,7 @@ import { audio } from './utils/audio';
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>(GameState.MENU);
   const [sector, setSector] = useState(1);
-  const [sectorStats, setSectorStats] = useState({ percent: 0, ore: 0 });
+  const [sectorStats, setSectorStats] = useState({ percent: 0, ore: 0, time: 0, bonus: 0 });
   
   // Game State Refs (Single source of truth passed to canvas)
   const shipRef = useRef<Ship>({
@@ -56,8 +56,30 @@ const App: React.FC = () => {
     setGameState(GameState.PLAYING);
   };
 
-  const handleSectorCleared = (stats: { percent: number; ore: number }) => {
-    setSectorStats(stats);
+  const handleSectorCleared = (stats: { time: number; collected: number; total: number }) => {
+    const percent = stats.total > 0 ? Math.floor((stats.collected / stats.total) * 100) : 100;
+    
+    // Bonus Calculation
+    // 1. Value of secured ore (collected + floating)
+    // 2. Completionist bonus
+    // 3. Time efficiency bonus (if under 3 mins)
+    
+    const securedValue = stats.collected * ORE_VALUE;
+    const completionBonus = Math.floor(percent * 5); // up to 500 CR
+    const timeBonus = Math.max(0, Math.floor((180 - stats.time) * 2));
+    
+    const totalBonus = securedValue + completionBonus + timeBonus;
+    
+    // Award credits
+    shipRef.current.credits += totalBonus;
+    shipRef.current.cargo = 0; // "Secured" implies docked/transferred logic or just cleared
+    
+    setSectorStats({
+        percent,
+        ore: stats.collected,
+        time: stats.time,
+        bonus: totalBonus
+    });
     setGameState(GameState.SECTOR_CLEARED);
     audio.playUI('buy'); // Positive sound for progress
   };
